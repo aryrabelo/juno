@@ -38,6 +38,52 @@ class AgentsTest(unittest.TestCase):
             self.assertEqual(juno.read_legacy_agents(path), {"pessoal": "Pessoal · OPS"})
 
 
+class WordListTest(unittest.TestCase):
+    def test_string_or_list(self):
+        self.assertEqual(juno._word_list("Atlas"), ["atlas"])
+        self.assertEqual(juno._word_list(["atlas", "Ata"]), ["atlas", "ata"])
+
+
+class WaitPasteTest(unittest.TestCase):
+    def wait(self, before, after):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "Fluid.log"
+            log.write_bytes(before)
+            since = log.stat().st_size
+            log.write_bytes(after)
+            old, juno.FLUID_LOG, juno.PASTE_TIMEOUT_S = juno.FLUID_LOG, log, 0.3
+            try:
+                return juno.wait_paste(since)
+            finally:
+                juno.FLUID_LOG, juno.PASTE_TIMEOUT_S = old, 10.0
+
+    def test_inserted_without_paste_verify(self):  # FluidVoice 1.6.12
+        self.assertEqual(self.wait(b"x" * 10, b"x" * 10 + b"PIPELINE_SUMMARY outcome=inserted\n"), "pasted")
+
+    def test_history_only(self):
+        self.assertEqual(self.wait(b"x" * 10, b"x" * 10 + b"PIPELINE_SUMMARY outcome=history_only\n"), "no_field")
+
+    def test_log_rotated(self):
+        self.assertEqual(self.wait(b"x" * 500, b"PASTE_VERIFY confirmed\n"), "pasted")
+
+
+class ParseCommandTest(unittest.TestCase):
+    def test_next_agent_either_order(self):
+        expected = f"{juno.AGENT_WORD} {juno.NEXT_WORD}"
+        self.assertEqual(juno.parse_command([juno.AGENT_WORD, juno.NEXT_WORD], {}), expected)
+        self.assertEqual(juno.parse_command([juno.NEXT_WORD, juno.AGENT_WORD], {}), expected)
+
+    def test_next_agent_only_on_its_own(self):
+        self.assertIsNone(juno.parse_command(["[unk]", juno.NEXT_WORD, juno.AGENT_WORD], {}))
+        self.assertIsNone(juno.parse_command([juno.NEXT_WORD], {}))
+
+    def test_agent_nickname_keeps_order(self):
+        agents = {"vendas": "Vendas · OPS"}
+        self.assertEqual(juno.parse_command([juno.AGENT_WORD, "vendas"], agents), f"{juno.AGENT_WORD} vendas")
+        self.assertIsNone(juno.parse_command(["vendas", juno.AGENT_WORD], agents))
+
+
+
 class RmsTest(unittest.TestCase):
     def test_rms(self):
         self.assertEqual(juno.rms(b""), 0)
