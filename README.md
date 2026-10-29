@@ -45,12 +45,16 @@ is ignored as unknown.
 - **Start dictation by name** — say `juno` (or any name you pick) and Juno presses
   FluidVoice's dictation shortcut.
 - **Send by voice** — end with `câmbio` and a short pause: Juno stops dictation,
-  waits for FluidVoice to paste the text, and presses Enter.
+  waits for FluidVoice to paste the text, and presses Enter — in any app:
+  terminals, browsers, and Electron apps included.
+- **Cancel by voice** — say `desliga` on its own and Juno presses Esc.
+- **Several words per command** — give the bot name or the send word as a list,
+  e.g. `["atlas", "ata"]`, when the model mishears your first choice.
 - **Safe send** — the send word only counts at the end of what you say, followed
   by silence; if you keep talking, nothing is sent.
 - **Switch agents in [OpenBot](https://openbot.run)** — `agente <nickname>` brings
-  OpenBot to the front and opens that agent; `agente próximo` opens the next chat
-  with unread replies.
+  OpenBot to the front and opens that agent; `agente próximo` (or `próximo agente`)
+  opens the next chat with unread replies.
 - **Your words** — the bot name, the send word, the dictation shortcut, and the
   agent nicknames all live in one `config.json`.
 - **Start at login** — the installer can open Juno in a Terminal window on login.
@@ -66,8 +70,9 @@ is ignored as unknown.
 | --- | --- |
 | **bot name** (default `juno`) | Presses the FluidVoice dictation shortcut |
 | **send word** (default `câmbio`), at the end, then silence | Stops dictation, waits for the paste, presses Enter |
+| **stop word** (default `desliga`), on its own | Presses Esc |
 | **`agente <nickname>`**, on its own | Opens that agent in OpenBot (⌘K, paste name, Enter) |
-| **`agente próximo`**, on its own | Opens the next OpenBot chat with unread replies |
+| **`agente próximo`** or **`próximo agente`**, on its own | Opens the next OpenBot chat with unread replies and focuses its message box |
 
 Agent commands are ignored while dictation is running.
 The send word presses Enter even when nothing is being dictated, in whatever
@@ -117,6 +122,7 @@ after editing it.
 {
   "wake_word": "juno",
   "send_word": "câmbio",
+  "stop_word": "desliga",
   "dictation_shortcut": "option+command+.",
   "agent_word": "agente",
   "next_word": "próximo",
@@ -127,8 +133,9 @@ after editing it.
 
 | Key | What it is |
 | --- | --- |
-| `wake_word` | The bot's name; starts dictation |
-| `send_word` | Sends the message |
+| `wake_word` | The bot's name; starts dictation. A word or a list, e.g. `["atlas", "ata"]` |
+| `send_word` | Sends the message. A word or a list; FluidVoice removes only its own Spoken Send word from the text |
+| `stop_word` | Presses Esc |
 | `dictation_shortcut` | FluidVoice's shortcut, e.g. `control+option+.` |
 | `agent_word` / `next_word` | The words in `agente <nickname>` and `agente próximo` |
 | `app` | App whose ⌘K search opens agents |
@@ -157,8 +164,8 @@ Check a word before using it:
 - **FluidVoice state** — read from FluidVoice's own log, to know whether it is
   recording and when it finished pasting.
 - **`next-agent.swift`** — a small helper compiled at install that reads the
-  OpenBot sidebar through the Accessibility API and opens the first chat showing
-  "N new replies".
+  OpenBot sidebar through the Accessibility API, opens the first chat showing
+  "N new replies", and focuses its message box so the next dictation lands there.
 
 ## 🗂️ Project layout
 

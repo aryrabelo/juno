@@ -1,6 +1,7 @@
 {
   "wake_word": "juno",
   "send_word": "câmbio",
+  "stop_word": "desliga",
   "dictation_shortcut": "option+command+.",
   "agent_word": "agente",
   "next_word": "próximo",

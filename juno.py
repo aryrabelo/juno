@@ -35,14 +35,23 @@ FLUID_LOG = Path.home() / "Library" / "Logs" / "Fluid" / "Fluid.log"
 CONFIG_FILE = HERE / "config.json"  # criado pelo install.sh; ver config.example.json
 _config = json.loads(CONFIG_FILE.read_text(encoding="utf-8")) if CONFIG_FILE.exists() else {}
 LEGACY_AGENTS_FILE = HERE / "agentes.tsv"  # formato antigo; o install.sh migra para o config.json
-WAKE_WORD = _config.get("wake_word", "juno").lower()  # o "nome do bot"
-SEND_PHRASE = _config.get("send_word", "câmbio").lower().split()
+
+
+def _word_list(value):
+    """Uma palavra ou uma lista no config.json, ex.: "atlas" ou ["atlas", "ata"]."""
+    return [v.lower() for v in (value if isinstance(value, list) else [value])]
+
+
+WAKE_WORDS = _word_list(_config.get("wake_word", "juno"))  # o "nome do bot" (e variantes)
+WAKE_WORD = WAKE_WORDS[0]
+SEND_PHRASES = [p.split() for p in _word_list(_config.get("send_word", "câmbio"))]
+SEND_PHRASE = SEND_PHRASES[0]
 COOLDOWN_S = 2.0
 MIN_CONF = 0.95
 MAX_RECORDING_S = 300
 SEND_SILENCE_S = 0.8  # silêncio exigido depois da frase antes de enviar
 PASTE_TIMEOUT_S = 10.0  # espera máxima pelo FluidVoice colar (volta antes, assim que ele cola)
-NO_FIELD_GRACE_S = 1.5  # sem campo em foco, quanto ainda esperar por uma colagem
+STOP_WORD = _config.get("stop_word", "desliga").lower()  # falada sozinha: aperta Esc
 AGENT_WORD = _config.get("agent_word", "agente").lower()
 AGENT_APP = _config.get("app", _config.get("agent_app", "OpenBot"))  # app cuja busca (⌘K) abre o agente
 NEXT_WORD = _config.get("next_word", "próximo").lower()  # "agente próximo": próximo chat não lido
@@ -51,6 +60,7 @@ NEXT_AGENT = HERE / "bin" / "next-agent"  # compilado pelo install.sh a partir d
 DICTATION_SHORTCUT = _config.get("dictation_shortcut", "option+command+.")  # atalho do FluidVoice
 FLUID_SHORTCUT = None  # AppleScript do atalho; montado em main() a partir de DICTATION_SHORTCUT
 ENTER = 'key code 36'
+ESCAPE = 'key code 53'
 SEARCH = 'keystroke "k" using {command down}'
 CMD_ENTER = 'key code 36 using {command down}'
 
@@ -117,23 +127,25 @@ def fluid_log_size():
 def wait_paste(since):
     """Espera o FluidVoice colar depois de `since` bytes do log.
 
-    Retorna "pasted" (colou), "no_field" (não havia campo de texto em foco: ele não cola) ou
-    "timeout" (sem resposta em PASTE_TIMEOUT_S)."""
+    Retorna "pasted" (colou), "no_field" (ele guardou o texto só no histórico) ou "timeout"
+    (sem resposta em PASTE_TIMEOUT_S). O 1.6.13+ registra PASTE_VERIFY; todas as versões
+    fecham o ditado com PIPELINE_SUMMARY ... outcome=<inserted|history_only|...>."""
     started = time.time()
     deadline = started + PASTE_TIMEOUT_S
     outcome = "timeout"
     while time.time() < deadline:
+        if fluid_log_size() < since:  # o FluidVoice girou o log (Fluid.log -> Fluid.log.1)
+            since = 0
         try:
             with FLUID_LOG.open("rb") as f:
                 f.seek(since)
                 new = f.read()
         except OSError:
             break
-        if b"PASTE_VERIFY" in new:
+        if b"PASTE_VERIFY" in new or b"outcome=inserted" in new:
             outcome = "pasted"
             break
-        # Sem campo editável o FluidVoice quase nunca cola; dá uma margem curta e desiste.
-        if b"FOCUS_ASSESS unknown" in new and time.time() - started > NO_FIELD_GRACE_S:
+        if b"outcome=history_only" in new:
             outcome = "no_field"
             break
         time.sleep(0.1)
@@ -248,11 +260,9 @@ def on_send(test_only, cmd_enter):
         size = fluid_log_size()
         press(FLUID_SHORTCUT, f"{DICTATION_SHORTCUT} (parar FluidVoice)")
         outcome = wait_paste(size)
-        if outcome == "no_field":
-            log("o FluidVoice não achou campo de texto em foco; não apertei Enter")
-            return
-        if outcome == "timeout":
-            log("não vi o FluidVoice colar; envio mesmo assim")
+        if outcome != "pasted":
+            # Envia em qualquer app (terminal, navegador, Electron), sem exceção.
+            log(f"não vi o FluidVoice colar ({outcome}); envio mesmo assim")
     press(ENTER, "Enter")
     if cmd_enter:
         press(CMD_ENTER, "⌘Enter")
@@ -335,7 +345,7 @@ def stats(n):
         print(f"  teclas: {len(keys)} ({failed} falharam), média {sum(r['ms'] for r in keys) / len(keys):.0f} ms")
     pastes = [r for r in records if r["event"] == "paste"]
     if pastes:
-        missed = sum(1 for r in pastes if not r["seen"])
+        missed = sum(1 for r in pastes if r.get("outcome", "pasted" if r.get("seen") else "timeout") != "pasted")
         print(f"  colagens: {len(pastes)} ({missed} sem confirmação do FluidVoice)")
     for r in records[-10:]:
         rest = {k: v for k, v in r.items() if k not in ("ts", "event")}
@@ -361,6 +371,21 @@ def check_words(words):
             or f"missing in vocabulary: '{w}'" in result.stderr]
 
 
+def parse_command(said, agents):
+    """Palavras de um trecho (antes de uma pausa) -> comando, ou None. Só vale como fim da fala."""
+    if any(said[-len(p):] == p for p in SEND_PHRASES):
+        return " ".join(SEND_PHRASE)
+    if said == [STOP_WORD]:
+        return STOP_WORD  # só sozinha: no meio do ditado, um Esc cancelaria o texto
+    if said in ([AGENT_WORD, NEXT_WORD], [NEXT_WORD, AGENT_WORD]):  # "próximo agente" também vale
+        return f"{AGENT_WORD} {NEXT_WORD}"
+    if len(said) == 2 and said[0] == AGENT_WORD and said[1] in agents:
+        return f"{AGENT_WORD} {said[1]}"  # só a frase sozinha, nunca no meio de outra fala
+    if said[-1] in WAKE_WORDS:
+        return WAKE_WORD
+    return None
+
+
 def main():
     global FLUID_SHORTCUT
     if sys.argv[1:2] == ["migrate-agents"]:
@@ -379,7 +404,9 @@ def main():
     cmd_enter = "--cmd-enter" in sys.argv
     SetLogLevel(-1)
     agents = load_agents()
-    grammar = json.dumps([WAKE_WORD, *SEND_PHRASE, AGENT_WORD, NEXT_WORD, *agents, "[unk]"], ensure_ascii=False)
+    send_words = [w for p in SEND_PHRASES for w in p]
+    grammar = json.dumps([*WAKE_WORDS, *send_words, STOP_WORD, AGENT_WORD, NEXT_WORD, *agents, "[unk]"],
+                         ensure_ascii=False)
     rec = KaldiRecognizer(Model(str(MODEL)), 16000, grammar)
     rec.SetWords(True)
     audio = queue.Queue()
@@ -391,9 +418,11 @@ def main():
     pending_send = None  # trechos de silêncio contados depois de "câmbio"; None = nada pendente
     peak = 0  # maior volume (RMS) do trecho atual, para saber se é preciso falar mais alto
     send_text = " ".join(SEND_PHRASE)
-    commands = {WAKE_WORD, AGENT_WORD, *SEND_PHRASE, *agents}
+    commands = {*WAKE_WORDS, AGENT_WORD, *send_words, STOP_WORD, *agents}
     with sd.RawInputStream(samplerate=16000, blocksize=4000, dtype="int16", channels=1, callback=callback):
-        log(f'ouvindo "{WAKE_WORD}", "{send_text}" e "{AGENT_WORD} <apelido>" ({len(agents)} agentes)...')
+        wake_list = "/".join(WAKE_WORDS)
+        send_list = "/".join(" ".join(p) for p in SEND_PHRASES)
+        log(f'ouvindo "{wake_list}", "{send_list}", "{STOP_WORD}" e "{AGENT_WORD} <apelido>" ({len(agents)} agentes)...')
         event("start", test=test_only, agents=len(agents), min_conf=MIN_CONF, send_silence_s=SEND_SILENCE_S)
         while True:
             data = audio.get()
@@ -423,16 +452,8 @@ def main():
             conf = words[-1]["conf"]
             heard = {"words": said, "conf": round(conf, 2), "peak": level}
 
-            # Só vale como fim da fala, antes de uma pausa.
-            if said[-len(SEND_PHRASE):] == SEND_PHRASE:
-                command = send_text
-            elif said == [AGENT_WORD, NEXT_WORD]:
-                command = f"{AGENT_WORD} {NEXT_WORD}"
-            elif len(said) == 2 and said[0] == AGENT_WORD and said[1] in agents:
-                command = f"{AGENT_WORD} {said[1]}"  # só a frase sozinha, nunca no meio de outra fala
-            elif said[-1] == WAKE_WORD:
-                command = WAKE_WORD
-            else:
+            command = parse_command(said, agents)
+            if command is None:
                 event("heard", command=None, decision="não é comando no fim da fala", **heard)
                 continue
             if conf < MIN_CONF:
@@ -448,6 +469,9 @@ def main():
                 pending_send = 0
             elif command == WAKE_WORD:
                 on_wake(test_only)
+            elif command == STOP_WORD:
+                if not test_only:
+                    press(ESCAPE, "Esc")
             elif command == f"{AGENT_WORD} {NEXT_WORD}":
                 on_next(test_only)
             else:
