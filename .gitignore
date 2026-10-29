@@ -2,4 +2,5 @@
 models/
 *.log
 agentes.tsv
+config.json
 __pycache__/

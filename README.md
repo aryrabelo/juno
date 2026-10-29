@@ -1,50 +1,78 @@
 # Juno
 
-Comandos de voz sem as mãos para macOS, com reconhecimento **offline** ([Vosk](https://alphacephei.com/vosk/)).
-Feito para ditar mensagens com o [FluidVoice](https://github.com/altic-dev/FluidVoice) e enviar sem tocar no teclado.
+Fale com o computador sem as mãos, no macOS. Você chama o bot pelo nome, dita a mensagem e diz uma palavra para enviar.
+Funciona **offline** ([Vosk](https://alphacephei.com/vosk/)): o áudio nunca sai do computador.
 
-| Você diz | O Juno faz |
-|---|---|
-| **“juno”** | Aperta ⌥⌘. para o FluidVoice começar a ditar |
-| **“câmbio”** (no fim da fala, seguido de silêncio) | Para o ditado, espera o texto ser colado e aperta Enter |
-| **“agente &lt;apelido&gt;”** (frase sozinha, fora do ditado) | Traz o OpenBot para a frente, abre a busca (⌘K), cola o nome do agente e aperta Enter |
-
-O áudio nunca sai do computador: o Juno só reconhece as palavras de comando, com um modelo local.
-
-## Requisitos
-- macOS, Python 3.9+
-- FluidVoice com o atalho de ditado **⌥⌘.** e o *Spoken Send* com a frase **“câmbio”** (ele tira a palavra do texto)
-
-## Instalação
-```bash
-git clone https://github.com/aryrabelo/juno.git
-cd juno
-./install.sh
-.venv/bin/python juno.py --test   # só mostra o que ouviu, sem apertar teclas
-.venv/bin/python juno.py          # modo real
 ```
-Permissões do macOS para o terminal (ou o Python) que roda o Juno:
-- **Microfone:** pedido ao iniciar, mesmo com `--test`.
-- **Acessibilidade:** conceda em Ajustes do Sistema › Privacidade e Segurança › Acessibilidade.
-- **Automação (System Events):** pedido na primeira tecla apertada.
+"juno" → fale a mensagem → "câmbio"   = a mensagem é enviada
+"agente vendas"                        = abre o agente "Vendas · OPS" no OpenBot
+```
 
+## Como configurar (5 minutos)
+
+1. **Instale o [FluidVoice](https://github.com/altic-dev/FluidVoice)** (ele transcreve o ditado) e, nos ajustes dele:
+   - atalho de ditado: **⌥⌘.** (Option + Command + ponto);
+   - *Spoken Send* ligado, com a **mesma palavra de envio** que você vai escolher abaixo (ela é tirada do texto).
+2. **Instale o Juno:**
+   ```bash
+   git clone https://github.com/aryrabelo/juno.git
+   cd juno
+   ./install.sh
+   ```
+   O instalador pergunta o **nome do bot** (padrão `juno`) e a **palavra de envio** (padrão `câmbio`).
+   Ele só aceita palavras que o modelo de voz em português conhece.
+3. **Teste sem apertar nada:**
+   ```bash
+   .venv/bin/python juno.py --test --verbose
+   ```
+   Diga o nome do bot e veja aparecer `ouvi ...`.
+4. **Use de verdade:** `.venv/bin/python juno.py`
+5. **Permissões do macOS** para o Terminal: Microfone (pedido ao iniciar), Acessibilidade (Ajustes do Sistema ›
+   Privacidade e Segurança › Acessibilidade) e Automação/System Events (pedido na primeira tecla).
+
+## Comandos de voz
+
+| Você diz | O que acontece |
+|---|---|
+| **nome do bot** (ex.: “juno”) | O FluidVoice começa a ditar |
+| **palavra de envio** (ex.: “câmbio”), no fim da fala e seguida de silêncio | Para o ditado, espera o texto ser colado e aperta Enter |
+| **“agente &lt;apelido&gt;”**, sozinho e fora do ditado | Traz o OpenBot para a frente, abre a busca (⌘K) e abre o agente |
+
+Os agentes ficam em `agentes.tsv`: uma linha por agente, `apelido<TAB>nome do agente`.
 Opção `--cmd-enter`: depois do Enter, aperta também ⌘Enter (para apps que enviam assim).
 
-## Troca de agente por voz
-Edite `agentes.tsv` (criado a partir de `agentes.example.tsv`): uma linha por agente, `apelido<TAB>nome do agente`. O app alvo é o OpenBot (`AGENT_APP` em `juno.py`).
-O apelido precisa ser uma palavra do vocabulário do modelo Vosk em português.
+## Trocar o nome do bot depois
+
+Edite `config.json` e reinicie o Juno. Antes, confira se o modelo conhece a palavra:
+```bash
+.venv/bin/python juno.py check-words sexta
+```
+
+| Campo | Padrão | O que é |
+|---|---|---|
+| `wake_word` | `juno` | Nome do bot: começa o ditado |
+| `send_word` | `câmbio` | Envia a mensagem |
+| `agent_word` | `agente` | Prefixo para trocar de agente |
+| `agent_app` | `OpenBot` | App onde a troca de agente acontece |
+
+## Ver o que está acontecendo
+
+```bash
+.venv/bin/python juno.py stats      # o que foi ouvido, aceito, ignorado (e por quê), tempos
+```
+Os eventos ficam em `~/Library/Logs/Juno/events.jsonl` (volume, confiança, decisão, tempo de cada tecla).
+Só as palavras de comando são gravadas; nada do que você dita.
 
 ## Limitações conhecidas
-- Precisa falar alto e claro; a palavra é confirmada depois de uma pausa (≈1 s).
-- “câmbio” aperta Enter mesmo sem ditado em andamento (na janela que estiver em foco).
-- Se o *Spoken Send* do FluidVoice também apertar Enter, podem sair dois Enters (inofensivo quando a caixa já está vazia).
+- Fale alto e claro; o comando é confirmado depois de uma pausa (≈1 s).
+- A palavra de envio aperta Enter mesmo sem ditado em andamento (na janela em foco).
+- Se o FluidVoice não achar um campo de texto em foco, ele não cola e o Juno não aperta Enter.
 - O estado do ditado é lido do log do FluidVoice (`~/Library/Logs/Fluid/Fluid.log`).
 - Não inicia sozinho no login (ainda).
 
 ## Próximo passo
 - **“agente próximo”**: ir direto para o próximo agente que precisa de atenção, ou seja, o que tem o
-  número de mensagens não lidas ao lado do nome na barra lateral. Hoje o app não tem atalho para isso;
-  o caminho é ler esse contador na barra lateral (Acessibilidade) ou pedir o atalho ao app.
+  número de mensagens não lidas ao lado do nome na barra lateral.
 
 ## Licença
 MIT
