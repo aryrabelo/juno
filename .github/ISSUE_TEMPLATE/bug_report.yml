@@ -1,0 +1,43 @@
+name: Bug report
+description: Report something that isn't working as expected
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: What did you say, and in which app?
+      placeholder: |
+        1. Say "juno"
+        2. Dictate a message
+        3. Say "câmbio" — nothing is sent
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: macOS version
+      placeholder: "e.g. macOS 26.1"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Juno version or commit
+      placeholder: "e.g. v0.3.0 or a commit SHA"
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Output of `juno.py --test --verbose` or `juno.py stats` (they log command words only).
+    validations:
+      required: false

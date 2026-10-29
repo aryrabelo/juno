@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest an idea for Juno
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the use case, not just the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like Juno to do?
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      description: Juno is small and offline on purpose.
+      options:
+        - label: I've read the Non-goals section in the README and believe this fits Juno's scope.
+          required: false

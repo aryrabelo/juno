@@ -1,7 +1,12 @@
 {
   "wake_word": "juno",
   "send_word": "câmbio",
+  "dictation_shortcut": "option+command+.",
   "agent_word": "agente",
-  "agent_app": "OpenBot",
-  "next_word": "próximo"
+  "next_word": "próximo",
+  "app": "OpenBot",
+  "agents": {
+    "vendas": "Vendas · OPS",
+    "agenda": "Assistente"
+  }
 }
