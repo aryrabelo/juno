@@ -29,9 +29,10 @@ COOLDOWN_S = 2.0
 MIN_CONF = 0.95
 MAX_RECORDING_S = 300
 SEND_SILENCE_S = 0.8  # silêncio exigido depois da frase antes de enviar
-PASTE_TIMEOUT_S = 2.5  # espera máxima pelo FluidVoice colar o texto
+PASTE_TIMEOUT_S = 10.0  # espera máxima pelo FluidVoice colar (volta antes, assim que ele cola)
 AGENT_WORD = "agente"
 AGENTS_FILE = HERE / "agentes.tsv"  # <apelido falado> TAB <texto da busca>
+AGENT_APP = "OpenBot"  # app cuja busca (⌘K) abre o agente
 
 FLUID_SHORTCUT = 'key code 47 using {command down, option down}'  # ⌥⌘.
 ENTER = 'key code 36'
@@ -50,6 +51,20 @@ def press(keys, label):
         log(f"falha ao apertar {label}: {result.stderr.strip()}")
     else:
         log(f"apertei {label}")
+
+
+def run_script(script, *args):
+    return subprocess.run(["osascript", "-e", script, *args], capture_output=True, text=True)
+
+
+def type_text(text):
+    """Cola `text` (⌘V) em vez de digitar: keystroke perde "·" e acentos em alguns layouts.
+    Restaura a área de transferência depois."""
+    old = subprocess.run(["pbpaste"], capture_output=True).stdout
+    subprocess.run(["pbcopy"], input=text.encode("utf-8"))
+    press('keystroke "v" using {command down}', f'"{text}" (⌘V)')
+    time.sleep(0.3)
+    subprocess.run(["pbcopy"], input=old)
 
 
 def fluid_log_size():
@@ -81,7 +96,12 @@ def load_agents():
         for line in AGENTS_FILE.read_text(encoding="utf-8").splitlines():
             if line.strip() and not line.startswith("#") and "\t" in line:
                 alias, target = line.split("\t", 1)
-                agents[alias.strip().lower()] = target.strip()
+                alias = alias.strip().lower()
+                target = "".join(c for c in target.strip() if c.isprintable())
+                if not alias or " " in alias or not target:
+                    log(f"agentes.tsv: ignorei a linha {line!r} (apelido de uma palavra e nome obrigatórios)")
+                    continue
+                agents[alias] = target
     return agents
 
 
@@ -107,7 +127,7 @@ def fluid_recording():
         return True
     now = time.localtime()
     age = (now.tm_hour * 3600 + now.tm_min * 60 + now.tm_sec) - (started.tm_hour * 3600 + started.tm_min * 60 + started.tm_sec)
-    return 0 <= age < MAX_RECORDING_S
+    return age % 86400 < MAX_RECORDING_S  # % 86400: gravação que atravessa a meia-noite
 
 
 def on_wake(test_only):
@@ -137,9 +157,19 @@ def on_agent(test_only, target):
         return
     if test_only:
         return
+    # Só no app certo: ⌘K + Enter em outro app (navegador, Slack, editor) faria outra coisa.
+    result = run_script(f'tell application "{AGENT_APP}" to activate')
+    if result.returncode != 0:
+        log(f"não consegui abrir o {AGENT_APP}: {result.stderr.strip()}")
+        return
+    time.sleep(0.4)
+    front = run_script('tell application "System Events" to get name of first process whose frontmost is true')
+    if front.stdout.strip() != AGENT_APP:
+        log(f"{AGENT_APP} não ficou na frente ({front.stdout.strip() or '?'}); não troquei de agente")
+        return
     press(SEARCH, "⌘K (busca)")
     time.sleep(0.4)
-    press(f"keystroke {json.dumps(target, ensure_ascii=False)}", f'"{target}"')
+    type_text(target)
     time.sleep(0.8)
     press(ENTER, "Enter")
 

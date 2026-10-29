@@ -7,7 +7,7 @@ Feito para ditar mensagens com o [FluidVoice](https://github.com/altic-dev/Fluid
 |---|---|
 | **“juno”** | Aperta ⌥⌘. para o FluidVoice começar a ditar |
 | **“câmbio”** (no fim da fala, seguido de silêncio) | Para o ditado, espera o texto ser colado e aperta Enter |
-| **“agente &lt;apelido&gt;”** (frase sozinha) | Abre a busca do app (⌘K), digita o nome do agente e aperta Enter |
+| **“agente &lt;apelido&gt;”** (frase sozinha, fora do ditado) | Traz o OpenBot para a frente, abre a busca (⌘K), cola o nome do agente e aperta Enter |
 
 O áudio nunca sai do computador: o Juno só reconhece as palavras de comando, com um modelo local.
 
@@ -23,14 +23,21 @@ cd juno
 .venv/bin/python juno.py --test   # só mostra o que ouviu, sem apertar teclas
 .venv/bin/python juno.py          # modo real
 ```
-Na primeira tecla apertada, o macOS pede permissão de **Acessibilidade** e de **Microfone** para o terminal ou o Python. Aprove.
+Permissões do macOS para o terminal (ou o Python) que roda o Juno:
+- **Microfone:** pedido ao iniciar, mesmo com `--test`.
+- **Acessibilidade:** conceda em Ajustes do Sistema › Privacidade e Segurança › Acessibilidade.
+- **Automação (System Events):** pedido na primeira tecla apertada.
+
+Opção `--cmd-enter`: depois do Enter, aperta também ⌘Enter (para apps que enviam assim).
 
 ## Troca de agente por voz
-Edite `agentes.tsv` (criado a partir de `agentes.example.tsv`): uma linha por agente, `apelido<TAB>texto da busca`.
+Edite `agentes.tsv` (criado a partir de `agentes.example.tsv`): uma linha por agente, `apelido<TAB>nome do agente`. O app alvo é o OpenBot (`AGENT_APP` em `juno.py`).
 O apelido precisa ser uma palavra do vocabulário do modelo Vosk em português.
 
 ## Limitações conhecidas
-- Precisa falar alto e claro; a palavra é confirmada depois de uma pausa (≈1–3 s).
+- Precisa falar alto e claro; a palavra é confirmada depois de uma pausa (≈1 s).
+- “câmbio” aperta Enter mesmo sem ditado em andamento (na janela que estiver em foco).
+- Se o *Spoken Send* do FluidVoice também apertar Enter, podem sair dois Enters (inofensivo quando a caixa já está vazia).
 - O estado do ditado é lido do log do FluidVoice (`~/Library/Logs/Fluid/Fluid.log`).
 - Não inicia sozinho no login (ainda).
 

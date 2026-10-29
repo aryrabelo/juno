@@ -1,4 +1,4 @@
-# apelido falado<TAB>texto digitado na busca do app (⌘K)
-# O apelido precisa existir no vocabulário do modelo Vosk.
-pessoal	Pessoal · OPS
-assistente	Pessoal · EA
+# apelido falado<TAB>nome do agente na busca do OpenBot (⌘K)
+# O apelido é uma palavra só, do vocabulário do modelo Vosk em português.
+vendas	Vendas · OPS
+agenda	Assistente

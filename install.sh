@@ -12,9 +12,11 @@ python3 -m venv .venv
 
 if [ ! -d "models/$MODEL" ]; then
   mkdir -p models
-  curl -fsSL -o "models/$MODEL.zip" "$MODEL_URL"
-  unzip -q "models/$MODEL.zip" -d models
-  rm "models/$MODEL.zip"
+  tmp="$(mktemp -d)"
+  curl -fsSL -o "$tmp/model.zip" "$MODEL_URL"
+  unzip -q "$tmp/model.zip" -d "$tmp"   # extrai fora de models/: falha no meio não deixa modelo quebrado
+  mv "$tmp/$MODEL" "models/$MODEL"
+  rm -rf "$tmp"
 fi
 
 [ -f agentes.tsv ] || cp agentes.example.tsv agentes.tsv
