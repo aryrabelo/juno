@@ -48,5 +48,13 @@ PY
   fi
 fi
 
+# Ajudante do "agente próximo": lê a barra lateral do app pela Acessibilidade.
+if command -v swiftc >/dev/null; then
+  mkdir -p bin
+  swiftc -O -o bin/next-agent next-agent.swift
+else
+  echo "Aviso: sem swiftc (xcode-select --install); \"agente próximo\" fica desligado." >&2
+fi
+
 [ -f agentes.tsv ] || cp agentes.example.tsv agentes.tsv
 echo "Pronto. Teste com: .venv/bin/python juno.py --test --verbose"

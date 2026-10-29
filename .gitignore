@@ -4,3 +4,4 @@ models/
 agentes.tsv
 config.json
 __pycache__/
+bin/

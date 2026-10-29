@@ -5,8 +5,9 @@
 "câmbio" (no fim da fala, seguido de silêncio) -> se o FluidVoice estiver gravando, para o
             ditado (o Spoken Send dele tira "câmbio" do texto) e espera colar; depois aperta
             Enter (e, com --cmd-enter, também ⌘Enter).
-"agente <apelido>" (fala sozinha, fora do ditado) -> abre a busca global do app (⌘K), digita o
-            nome do agente cadastrado em agentes.tsv e aperta Enter.
+"agente <apelido>" (fala sozinha, fora do ditado) -> traz o app para a frente, abre a busca (⌘K),
+            cola o nome do agente cadastrado em agentes.tsv e aperta Enter.
+"agente próximo" -> abre o primeiro chat da barra lateral com respostas não lidas (bin/next-agent).
 
 Uso: .venv/bin/python juno.py [--test] [--cmd-enter] [--verbose]
      .venv/bin/python juno.py stats [N]   # resumo dos últimos N eventos (padrão 500)
@@ -43,6 +44,8 @@ NO_FIELD_GRACE_S = 1.5  # sem campo em foco, quanto ainda esperar por uma colage
 AGENT_WORD = _config.get("agent_word", "agente").lower()
 AGENTS_FILE = HERE / "agentes.tsv"  # <apelido falado> TAB <texto da busca>
 AGENT_APP = _config.get("agent_app", "OpenBot")  # app cuja busca (⌘K) abre o agente
+NEXT_WORD = _config.get("next_word", "próximo").lower()  # "agente próximo": próximo chat não lido
+NEXT_AGENT = HERE / "bin" / "next-agent"  # compilado pelo install.sh a partir de next-agent.swift
 
 FLUID_SHORTCUT = 'key code 47 using {command down, option down}'  # ⌥⌘.
 ENTER = 'key code 36'
@@ -203,21 +206,52 @@ def on_send(test_only, cmd_enter):
         press(CMD_ENTER, "⌘Enter")
 
 
+def bring_app_front():
+    """Traz o AGENT_APP para a frente e confere: ⌘K + Enter em outro app (navegador, Slack,
+    editor) faria outra coisa."""
+    result = run_script(f'tell application "{AGENT_APP}" to activate')
+    if result.returncode != 0:
+        log(f"não consegui abrir o {AGENT_APP}: {result.stderr.strip()}")
+        return False
+    time.sleep(0.4)
+    front = run_script('tell application "System Events" to get name of first process whose frontmost is true')
+    if front.stdout.strip() != AGENT_APP:
+        log(f"{AGENT_APP} não ficou na frente ({front.stdout.strip() or '?'}); não troquei de agente")
+        return False
+    return True
+
+
+def on_next(test_only):
+    if fluid_recording():
+        log("ditado em andamento; não troquei de agente")
+        return
+    if not NEXT_AGENT.exists():
+        log(f"falta {NEXT_AGENT}: rode ./install.sh (precisa do swiftc)")
+        return
+    args = [str(NEXT_AGENT), AGENT_APP] if not test_only else [str(NEXT_AGENT), "--dry-run", AGENT_APP]
+    if not test_only and not bring_app_front():
+        return
+    started = time.time()
+    result = subprocess.run(args, capture_output=True, text=True)
+    ms = round((time.time() - started) * 1000)
+    name = result.stdout.strip()
+    outcome = {0: "found" if test_only else "opened", 1: "none"}.get(result.returncode, "error")
+    event("next_agent", outcome=outcome, chat=name or None, ms=ms, error=result.stderr.strip() or None)
+    if outcome in ("opened", "found"):
+        log(f"abri o próximo com não lidas: {name}" + (" (teste: não abri)" if test_only else ""))
+    elif outcome == "none":
+        log("nenhum agente com respostas não lidas")
+    else:
+        log(f"falha ao procurar o próximo agente: {result.stderr.strip()}")
+
+
 def on_agent(test_only, target):
     if fluid_recording():
         log("ditado em andamento; não troquei de agente")
         return
     if test_only:
         return
-    # Só no app certo: ⌘K + Enter em outro app (navegador, Slack, editor) faria outra coisa.
-    result = run_script(f'tell application "{AGENT_APP}" to activate')
-    if result.returncode != 0:
-        log(f"não consegui abrir o {AGENT_APP}: {result.stderr.strip()}")
-        return
-    time.sleep(0.4)
-    front = run_script('tell application "System Events" to get name of first process whose frontmost is true')
-    if front.stdout.strip() != AGENT_APP:
-        log(f"{AGENT_APP} não ficou na frente ({front.stdout.strip() or '?'}); não troquei de agente")
+    if not bring_app_front():
         return
     press(SEARCH, "⌘K (busca)")
     time.sleep(0.4)
@@ -288,7 +322,7 @@ def main():
     cmd_enter = "--cmd-enter" in sys.argv
     SetLogLevel(-1)
     agents = load_agents()
-    grammar = json.dumps([WAKE_WORD, *SEND_PHRASE, AGENT_WORD, *agents, "[unk]"], ensure_ascii=False)
+    grammar = json.dumps([WAKE_WORD, *SEND_PHRASE, AGENT_WORD, NEXT_WORD, *agents, "[unk]"], ensure_ascii=False)
     rec = KaldiRecognizer(Model(str(MODEL)), 16000, grammar)
     rec.SetWords(True)
     audio = queue.Queue()
@@ -335,6 +369,8 @@ def main():
             # Só vale como fim da fala, antes de uma pausa.
             if said[-len(SEND_PHRASE):] == SEND_PHRASE:
                 command = send_text
+            elif said == [AGENT_WORD, NEXT_WORD]:
+                command = f"{AGENT_WORD} {NEXT_WORD}"
             elif len(said) == 2 and said[0] == AGENT_WORD and said[1] in agents:
                 command = f"{AGENT_WORD} {said[1]}"  # só a frase sozinha, nunca no meio de outra fala
             elif said[-1] == WAKE_WORD:
@@ -355,6 +391,8 @@ def main():
                 pending_send = 0
             elif command == WAKE_WORD:
                 on_wake(test_only)
+            elif command == f"{AGENT_WORD} {NEXT_WORD}":
+                on_next(test_only)
             else:
                 target = agents[said[1]]
                 log(f"-> {target}")
