@@ -34,5 +34,10 @@ O apelido precisa ser uma palavra do vocabulário do modelo Vosk em português.
 - O estado do ditado é lido do log do FluidVoice (`~/Library/Logs/Fluid/Fluid.log`).
 - Não inicia sozinho no login (ainda).
 
+## Próximo passo
+- **“agente próximo”**: ir direto para o próximo agente que precisa de atenção, ou seja, o que tem o
+  número de mensagens não lidas ao lado do nome na barra lateral. Hoje o app não tem atalho para isso;
+  o caminho é ler esse contador na barra lateral (Acessibilidade) ou pedir o atalho ao app.
+
 ## Licença
 MIT
