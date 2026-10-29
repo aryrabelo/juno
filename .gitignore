@@ -1,0 +1,5 @@
+.venv/
+models/
+*.log
+agentes.tsv
+__pycache__/
