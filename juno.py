@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Juno: comandos de voz sem as mãos, com reconhecimento offline (Vosk).
 
-"juno"   -> aperta o atalho do FluidVoice (⌥⌘.) para começar o ditado.
+"juno"   -> aperta o atalho de ditado do FluidVoice (config.json, padrão ⌥⌘.).
 "câmbio" (no fim da fala, seguido de silêncio) -> se o FluidVoice estiver gravando, para o
             ditado (o Spoken Send dele tira "câmbio" do texto) e espera colar; depois aperta
             Enter (e, com --cmd-enter, também ⌘Enter).
 "agente <apelido>" (fala sozinha, fora do ditado) -> traz o app para a frente, abre a busca (⌘K),
-            cola o nome do agente cadastrado em agentes.tsv e aperta Enter.
+            cola o nome do agente cadastrado em "agents" no config.json e aperta Enter.
 "agente próximo" -> abre o primeiro chat da barra lateral com respostas não lidas (bin/next-agent).
 
 Uso: .venv/bin/python juno.py [--test] [--cmd-enter] [--verbose]
@@ -16,8 +16,9 @@ Eventos (JSON por linha) em ~/Library/Logs/Juno/events.jsonl: cada trecho reconh
 confiança e volume, se virou ação ou por que foi ignorado, e quanto cada ação levou. Só ficam
 registradas as palavras de comando (o resto vira "[unk]"); nenhum texto ditado é gravado.
 """
-import audioop
+import array
 import json
+import math
 import os
 import queue
 import subprocess
@@ -33,6 +34,7 @@ MODEL = HERE / "models" / "vosk-model-small-pt-0.3"
 FLUID_LOG = Path.home() / "Library" / "Logs" / "Fluid" / "Fluid.log"
 CONFIG_FILE = HERE / "config.json"  # criado pelo install.sh; ver config.example.json
 _config = json.loads(CONFIG_FILE.read_text(encoding="utf-8")) if CONFIG_FILE.exists() else {}
+LEGACY_AGENTS_FILE = HERE / "agentes.tsv"  # formato antigo; o install.sh migra para o config.json
 WAKE_WORD = _config.get("wake_word", "juno").lower()  # o "nome do bot"
 SEND_PHRASE = _config.get("send_word", "câmbio").lower().split()
 COOLDOWN_S = 2.0
@@ -42,12 +44,12 @@ SEND_SILENCE_S = 0.8  # silêncio exigido depois da frase antes de enviar
 PASTE_TIMEOUT_S = 10.0  # espera máxima pelo FluidVoice colar (volta antes, assim que ele cola)
 NO_FIELD_GRACE_S = 1.5  # sem campo em foco, quanto ainda esperar por uma colagem
 AGENT_WORD = _config.get("agent_word", "agente").lower()
-AGENTS_FILE = HERE / "agentes.tsv"  # <apelido falado> TAB <texto da busca>
-AGENT_APP = _config.get("agent_app", "OpenBot")  # app cuja busca (⌘K) abre o agente
+AGENT_APP = _config.get("app", _config.get("agent_app", "OpenBot"))  # app cuja busca (⌘K) abre o agente
 NEXT_WORD = _config.get("next_word", "próximo").lower()  # "agente próximo": próximo chat não lido
 NEXT_AGENT = HERE / "bin" / "next-agent"  # compilado pelo install.sh a partir de next-agent.swift
 
-FLUID_SHORTCUT = 'key code 47 using {command down, option down}'  # ⌥⌘.
+DICTATION_SHORTCUT = _config.get("dictation_shortcut", "option+command+.")  # atalho do FluidVoice
+FLUID_SHORTCUT = None  # AppleScript do atalho; montado em main() a partir de DICTATION_SHORTCUT
 ENTER = 'key code 36'
 SEARCH = 'keystroke "k" using {command down}'
 CMD_ENTER = 'key code 36 using {command down}'
@@ -139,20 +141,70 @@ def wait_paste(since):
     return outcome
 
 
-def load_agents():
-    """agentes.tsv: <apelido> TAB <texto digitado na busca>. Linhas com # são comentário."""
+MODIFIERS = {"command": "command", "cmd": "command", "⌘": "command",
+             "option": "option", "opt": "option", "alt": "option", "⌥": "option",
+             "control": "control", "ctrl": "control", "⌃": "control",
+             "shift": "shift", "⇧": "shift"}
+KEY_CODES = {".": 47, ",": 43, "/": 44, ";": 41, "'": 39, "-": 27, "=": 24, "space": 49,
+             "return": 36, "enter": 36, "tab": 48, "escape": 53, "esc": 53}
+
+
+def shortcut_script(shortcut):
+    """'control+option+.' -> trecho AppleScript do System Events ('key code 47 using {...}')."""
+    parts = [p.strip().lower() for p in shortcut.split("+")]
+    *mods, key = parts
+    try:
+        using = sorted({MODIFIERS[m] for m in mods})
+    except KeyError as exc:
+        raise SystemExit(f"config.json: modificador desconhecido em dictation_shortcut: {exc}")
+    if key in KEY_CODES:
+        action = f"key code {KEY_CODES[key]}"
+    elif len(key) == 1 and key.isalnum():
+        action = f'keystroke "{key}"'
+    else:
+        raise SystemExit(f"config.json: tecla desconhecida em dictation_shortcut: {key!r}")
+    if using:
+        action += " using {" + ", ".join(f"{m} down" for m in using) + "}"
+    return action
+
+
+def clean_agents(raw, source):
+    """Apelido de uma palavra -> nome do agente; descarta entradas inválidas com aviso."""
     agents = {}
-    if AGENTS_FILE.exists():
-        for line in AGENTS_FILE.read_text(encoding="utf-8").splitlines():
-            if line.strip() and not line.startswith("#") and "\t" in line:
-                alias, target = line.split("\t", 1)
-                alias = alias.strip().lower()
-                target = "".join(c for c in target.strip() if c.isprintable())
-                if not alias or " " in alias or not target:
-                    log(f"agentes.tsv: ignorei a linha {line!r} (apelido de uma palavra e nome obrigatórios)")
-                    continue
-                agents[alias] = target
+    for alias, target in raw.items():
+        alias = str(alias).strip().lower()
+        target = "".join(c for c in str(target).strip() if c.isprintable())
+        if not alias or " " in alias or not target:
+            log(f"{source}: ignorei {alias!r} -> {target!r} (apelido de uma palavra e nome obrigatórios)")
+            continue
+        agents[alias] = target
     return agents
+
+
+def read_legacy_agents(path):
+    """agentes.tsv (formato antigo): <apelido> TAB <nome>. Linhas com # são comentário."""
+    raw = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.startswith("#") and "\t" in line:
+            alias, target = line.split("\t", 1)
+            raw[alias] = target
+    return raw
+
+
+def load_agents():
+    if "agents" in _config:
+        return clean_agents(_config["agents"], "config.json")
+    if LEGACY_AGENTS_FILE.exists():  # instalação antiga ainda não migrada
+        return clean_agents(read_legacy_agents(LEGACY_AGENTS_FILE), "agentes.tsv")
+    return {}
+
+
+def rms(chunk):
+    """Volume (RMS) de áudio int16 mono; substitui audioop.rms, que saiu do Python 3.13."""
+    samples = array.array("h", chunk)
+    if not samples:
+        return 0
+    return int(math.sqrt(sum(x * x for x in samples) / len(samples)))
 
 
 def fluid_recording():
@@ -185,7 +237,7 @@ def on_wake(test_only):
         log("FluidVoice já está gravando; ignorei")
         return
     if not test_only:
-        press(FLUID_SHORTCUT, "⌥⌘. (FluidVoice)")
+        press(FLUID_SHORTCUT, f"{DICTATION_SHORTCUT} (FluidVoice)")
 
 
 def on_send(test_only, cmd_enter):
@@ -194,7 +246,7 @@ def on_send(test_only, cmd_enter):
     if fluid_recording():
         # Para o ditado; o FluidVoice tira "câmbio" do texto ao colar.
         size = fluid_log_size()
-        press(FLUID_SHORTCUT, "⌥⌘. (parar FluidVoice)")
+        press(FLUID_SHORTCUT, f"{DICTATION_SHORTCUT} (parar FluidVoice)")
         outcome = wait_paste(size)
         if outcome == "no_field":
             log("o FluidVoice não achou campo de texto em foco; não apertei Enter")
@@ -310,6 +362,10 @@ def check_words(words):
 
 
 def main():
+    global FLUID_SHORTCUT
+    if sys.argv[1:2] == ["migrate-agents"]:
+        print(json.dumps(clean_agents(read_legacy_agents(Path(sys.argv[2])), sys.argv[2]), ensure_ascii=False))
+        return
     if sys.argv[1:2] == ["check-words"]:
         missing = check_words([w.lower() for w in sys.argv[2:]])
         for w in missing:
@@ -318,6 +374,7 @@ def main():
     if sys.argv[1:2] == ["stats"]:
         stats(int(sys.argv[2]) if len(sys.argv) > 2 else 500)
         return
+    FLUID_SHORTCUT = shortcut_script(DICTATION_SHORTCUT)
     test_only = "--test" in sys.argv
     cmd_enter = "--cmd-enter" in sys.argv
     SetLogLevel(-1)
@@ -340,7 +397,7 @@ def main():
         event("start", test=test_only, agents=len(agents), min_conf=MIN_CONF, send_silence_s=SEND_SILENCE_S)
         while True:
             data = audio.get()
-            peak = max(peak, audioop.rms(data, 2))
+            peak = max(peak, rms(data))
             final = rec.AcceptWaveform(data)
             words = json.loads(rec.Result()).get("result", []) if final else []
             if pending_send is not None:
