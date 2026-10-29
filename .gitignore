@@ -1,6 +1,6 @@
-.venv/
-models/
-bin/
+/.venv
+/models
+/bin
 *.log
 config.json
 agentes.tsv
