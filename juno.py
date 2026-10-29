@@ -5,6 +5,8 @@
 "câmbio" (no fim da fala, seguido de silêncio) -> se o FluidVoice estiver gravando, para o
             ditado (o Spoken Send dele tira "câmbio" do texto) e espera colar; depois aperta
             Enter (e, com --cmd-enter, também ⌘Enter).
+"agente <apelido>" (fala sozinha, fora do ditado) -> abre a busca global do app (⌘K), digita o
+            nome do agente cadastrado em agentes.tsv e aperta Enter.
 
 Uso: .venv/bin/python juno.py [--test] [--cmd-enter]
 """
@@ -26,11 +28,14 @@ SEND_PHRASE = ["câmbio"]
 COOLDOWN_S = 2.0
 MIN_CONF = 0.95
 MAX_RECORDING_S = 300
-SEND_SILENCE_S = 1.5  # silêncio exigido depois da frase antes de enviar
-PASTE_WAIT_S = 1.5
+SEND_SILENCE_S = 0.8  # silêncio exigido depois da frase antes de enviar
+PASTE_TIMEOUT_S = 2.5  # espera máxima pelo FluidVoice colar o texto
+AGENT_WORD = "agente"
+AGENTS_FILE = HERE / "agentes.tsv"  # <apelido falado> TAB <texto da busca>
 
 FLUID_SHORTCUT = 'key code 47 using {command down, option down}'  # ⌥⌘.
 ENTER = 'key code 36'
+SEARCH = 'keystroke "k" using {command down}'
 CMD_ENTER = 'key code 36 using {command down}'
 
 
@@ -45,6 +50,39 @@ def press(keys, label):
         log(f"falha ao apertar {label}: {result.stderr.strip()}")
     else:
         log(f"apertei {label}")
+
+
+def fluid_log_size():
+    try:
+        return FLUID_LOG.stat().st_size
+    except OSError:
+        return 0
+
+
+def wait_paste(since):
+    """Espera o FluidVoice registrar a colagem (PASTE_VERIFY) depois de `since` bytes do log."""
+    deadline = time.time() + PASTE_TIMEOUT_S
+    while time.time() < deadline:
+        try:
+            with FLUID_LOG.open("rb") as f:
+                f.seek(since)
+                if b"PASTE_VERIFY" in f.read():
+                    return
+        except OSError:
+            break
+        time.sleep(0.1)
+    log("não vi o FluidVoice colar; envio mesmo assim")
+
+
+def load_agents():
+    """agentes.tsv: <apelido> TAB <texto digitado na busca>. Linhas com # são comentário."""
+    agents = {}
+    if AGENTS_FILE.exists():
+        for line in AGENTS_FILE.read_text(encoding="utf-8").splitlines():
+            if line.strip() and not line.startswith("#") and "\t" in line:
+                alias, target = line.split("\t", 1)
+                agents[alias.strip().lower()] = target.strip()
+    return agents
 
 
 def fluid_recording():
@@ -85,18 +123,33 @@ def on_send(test_only, cmd_enter):
         return
     if fluid_recording():
         # Para o ditado; o FluidVoice tira "câmbio" do texto ao colar.
+        size = fluid_log_size()
         press(FLUID_SHORTCUT, "⌥⌘. (parar FluidVoice)")
-        time.sleep(PASTE_WAIT_S)
+        wait_paste(size)
     press(ENTER, "Enter")
     if cmd_enter:
         press(CMD_ENTER, "⌘Enter")
+
+
+def on_agent(test_only, target):
+    if fluid_recording():
+        log("ditado em andamento; não troquei de agente")
+        return
+    if test_only:
+        return
+    press(SEARCH, "⌘K (busca)")
+    time.sleep(0.4)
+    press(f"keystroke {json.dumps(target, ensure_ascii=False)}", f'"{target}"')
+    time.sleep(0.8)
+    press(ENTER, "Enter")
 
 
 def main():
     test_only = "--test" in sys.argv
     cmd_enter = "--cmd-enter" in sys.argv
     SetLogLevel(-1)
-    grammar = json.dumps([WAKE_WORD, *SEND_PHRASE, "[unk]"], ensure_ascii=False)
+    agents = load_agents()
+    grammar = json.dumps([WAKE_WORD, *SEND_PHRASE, AGENT_WORD, *agents, "[unk]"], ensure_ascii=False)
     rec = KaldiRecognizer(Model(str(MODEL)), 16000, grammar)
     rec.SetWords(True)
     audio = queue.Queue()
@@ -108,7 +161,7 @@ def main():
     pending_send = None  # frase de envio ouvida; só envia se vier silêncio depois
     send_text = " ".join(SEND_PHRASE)
     with sd.RawInputStream(samplerate=16000, blocksize=4000, dtype="int16", channels=1, callback=callback):
-        log(f'ouvindo "{WAKE_WORD}" e "{send_text}"...')
+        log(f'ouvindo "{WAKE_WORD}", "{send_text}" e "{AGENT_WORD} <apelido>" ({len(agents)} agentes)...')
         while True:
             final = rec.AcceptWaveform(audio.get())
             if pending_send:
@@ -129,6 +182,12 @@ def main():
                 last = time.time()
                 log(f'ouvi "{send_text}"')
                 pending_send = time.time()
+            elif len(words) == 2 and words[0]["word"] == AGENT_WORD and words[1]["word"] in agents:
+                # Só a frase sozinha ("agente pessoal"), nunca no meio de outra fala.
+                last = time.time()
+                target = agents[words[1]["word"]]
+                log(f'ouvi "{AGENT_WORD} {words[1]["word"]}" -> {target}')
+                on_agent(test_only, target)
             elif words[-1]["word"] == WAKE_WORD:
                 last = time.time()
                 log(f'ouvi "{WAKE_WORD}" conf={words[-1]["conf"]:.2f}')
