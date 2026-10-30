@@ -11,6 +11,10 @@
 
 ⭐ Star Juno on GitHub — it's a one-person project and every star helps.
 
+<a href="https://youtu.be/UAH7N-d7iS0"><img src="docs/video-thumbnail.jpg" alt="Watch Juno explained in under two minutes on YouTube" width="720"></a>
+
+▶️ **[Watch the video](https://youtu.be/UAH7N-d7iS0)** (English, 1:40) · [Assista em português](https://youtu.be/-C7LICcOcRU) (1:48)
+
 </div>
 
 ## Table of contents
