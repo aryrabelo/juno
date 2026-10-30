@@ -1,4 +1,5 @@
 {
+  "language": "pt",
   "wake_word": "juno",
   "send_word": "câmbio",
   "stop_word": "desliga",

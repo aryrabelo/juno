@@ -2,6 +2,7 @@
 
 Rodar: .venv/bin/python -m unittest discover -s tests
 """
+import json
 import sys
 import tempfile
 import unittest
@@ -42,6 +43,15 @@ class WordListTest(unittest.TestCase):
     def test_string_or_list(self):
         self.assertEqual(juno._word_list("Atlas"), ["atlas"])
         self.assertEqual(juno._word_list(["atlas", "Ata"]), ["atlas", "ata"])
+
+
+class ExampleConfigTest(unittest.TestCase):
+    def test_one_example_per_language_with_the_same_keys(self):
+        examples = {lang: json.loads((juno.HERE / f"config.example.{lang}.json").read_text(encoding="utf-8"))
+                    for lang in juno.MODELS}
+        for lang, config in examples.items():
+            self.assertEqual(config["language"], lang)
+        self.assertEqual(set(examples["pt"]), set(examples["en"]))
 
 
 class WaitPasteTest(unittest.TestCase):

@@ -6,3 +6,4 @@ config.json
 agentes.tsv
 agentes.tsv.migrated
 __pycache__/
+/videos

@@ -30,11 +30,23 @@ import sounddevice as sd
 from vosk import KaldiRecognizer, Model, SetLogLevel
 
 HERE = Path(__file__).resolve().parent
-MODEL = HERE / "models" / "vosk-model-small-pt-0.3"
 FLUID_LOG = Path.home() / "Library" / "Logs" / "Fluid" / "Fluid.log"
-CONFIG_FILE = HERE / "config.json"  # criado pelo install.sh; ver config.example.json
+CONFIG_FILE = HERE / "config.json"  # criado pelo install.sh a partir de config.example.<idioma>.json
 _config = json.loads(CONFIG_FILE.read_text(encoding="utf-8")) if CONFIG_FILE.exists() else {}
 LEGACY_AGENTS_FILE = HERE / "agentes.tsv"  # formato antigo; o install.sh migra para o config.json
+
+# Idioma -> modelo Vosk. As palavras padrão de cada idioma ficam em config.example.<idioma>.json.
+MODELS = {"pt": "vosk-model-small-pt-0.3", "en": "vosk-model-small-en-us-0.15"}
+LANGUAGE = _config.get("language", "pt")  # config.json sem "language" (instalação antiga) é português
+if LANGUAGE not in MODELS:
+    raise SystemExit(f'config.json: language "{LANGUAGE}" não existe; use "pt" ou "en"')
+MODEL = HERE / "models" / MODELS[LANGUAGE]
+_defaults = json.loads((HERE / f"config.example.{LANGUAGE}.json").read_text(encoding="utf-8"))
+
+
+def _setting(key):
+    """Valor do config.json ou, se faltar, o padrão do idioma."""
+    return _config.get(key, _defaults[key])
 
 
 def _word_list(value):
@@ -42,22 +54,25 @@ def _word_list(value):
     return [v.lower() for v in (value if isinstance(value, list) else [value])]
 
 
-WAKE_WORDS = _word_list(_config.get("wake_word", "juno"))  # o "nome do bot" (e variantes)
+WAKE_WORDS = _word_list(_setting("wake_word"))  # o "nome do bot" (e variantes)
 WAKE_WORD = WAKE_WORDS[0]
-SEND_PHRASES = [p.split() for p in _word_list(_config.get("send_word", "câmbio"))]
+SEND_PHRASES = [p.split() for p in _word_list(_setting("send_word"))]
 SEND_PHRASE = SEND_PHRASES[0]
 COOLDOWN_S = 2.0
 MIN_CONF = 0.95
+# O nome do bot dito rápido cai para ~0,85. Errar aqui só liga o ditado (nunca envia nem
+# desliga), então a régua é mais baixa que a do câmbio, que aperta Enter.
+WAKE_MIN_CONF = 0.80
 MAX_RECORDING_S = 300
 SEND_SILENCE_S = 0.8  # silêncio exigido depois da frase antes de enviar
 PASTE_TIMEOUT_S = 10.0  # espera máxima pelo FluidVoice colar (volta antes, assim que ele cola)
-STOP_WORD = _config.get("stop_word", "desliga").lower()  # falada sozinha: aperta Esc
-AGENT_WORD = _config.get("agent_word", "agente").lower()
+STOP_WORD = _setting("stop_word").lower()  # falada sozinha: aperta Esc
+AGENT_WORD = _setting("agent_word").lower()
 AGENT_APP = _config.get("app", _config.get("agent_app", "OpenBot"))  # app cuja busca (⌘K) abre o agente
-NEXT_WORD = _config.get("next_word", "próximo").lower()  # "agente próximo": próximo chat não lido
+NEXT_WORD = _setting("next_word").lower()  # "agente próximo": próximo chat não lido
 NEXT_AGENT = HERE / "bin" / "next-agent"  # compilado pelo install.sh a partir de next-agent.swift
 
-DICTATION_SHORTCUT = _config.get("dictation_shortcut", "option+command+.")  # atalho do FluidVoice
+DICTATION_SHORTCUT = _setting("dictation_shortcut")  # atalho do FluidVoice
 FLUID_SHORTCUT = None  # AppleScript do atalho; montado em main() a partir de DICTATION_SHORTCUT
 ENTER = 'key code 36'
 ESCAPE = 'key code 53'
@@ -352,7 +367,7 @@ def stats(n):
         print(f"  {time.strftime('%H:%M:%S', time.localtime(r['ts']))} {r['event']} {rest}")
 
 
-def check_words(words):
+def check_words(words, model=MODEL):
     """Palavras que o modelo Vosk não conhece (essas nunca seriam reconhecidas).
 
     O Vosk só avisa no stderr nativo, então o teste roda num processo à parte."""
@@ -364,9 +379,9 @@ def check_words(words):
         "for w in sys.argv[2:]:\n"
         "    KaldiRecognizer(m, 16000, json.dumps([w, '[unk]'], ensure_ascii=False))\n"
     )
-    result = subprocess.run([sys.executable, "-c", code, str(MODEL), *words], capture_output=True, text=True)
+    result = subprocess.run([sys.executable, "-c", code, str(model), *words], capture_output=True, text=True)
     if result.returncode != 0:
-        raise SystemExit(f"não consegui carregar o modelo em {MODEL}: rode ./install.sh")
+        raise SystemExit(f"não consegui carregar o modelo em {model}: rode ./install.sh")
     return [w for w in words if f"missing in vocabulary: {json.dumps(w)[1:-1]!r}" in result.stderr
             or f"missing in vocabulary: '{w}'" in result.stderr]
 
@@ -391,8 +406,14 @@ def main():
     if sys.argv[1:2] == ["migrate-agents"]:
         print(json.dumps(clean_agents(read_legacy_agents(Path(sys.argv[2])), sys.argv[2]), ensure_ascii=False))
         return
-    if sys.argv[1:2] == ["check-words"]:
-        missing = check_words([w.lower() for w in sys.argv[2:]])
+    if sys.argv[1:2] == ["model-name"]:  # usado pelo install.sh: juno.py model-name en
+        print(MODELS[sys.argv[2]])
+        return
+    if sys.argv[1:2] == ["check-words"]:  # juno.py check-words [--language en] palavra...
+        words, model = sys.argv[2:], MODEL
+        if words[:1] == ["--language"]:
+            model, words = HERE / "models" / MODELS[words[1]], words[2:]
+        missing = check_words([w.lower() for w in words], model)
         for w in missing:
             print(f"desconhecida: {w}")
         sys.exit(1 if missing else 0)
@@ -423,7 +444,8 @@ def main():
         wake_list = "/".join(WAKE_WORDS)
         send_list = "/".join(" ".join(p) for p in SEND_PHRASES)
         log(f'ouvindo "{wake_list}", "{send_list}", "{STOP_WORD}" e "{AGENT_WORD} <apelido>" ({len(agents)} agentes)...')
-        event("start", test=test_only, agents=len(agents), min_conf=MIN_CONF, send_silence_s=SEND_SILENCE_S)
+        event("start", test=test_only, agents=len(agents), min_conf=MIN_CONF, wake_min_conf=WAKE_MIN_CONF,
+              send_silence_s=SEND_SILENCE_S)
         while True:
             data = audio.get()
             peak = max(peak, rms(data))
@@ -456,7 +478,7 @@ def main():
             if command is None:
                 event("heard", command=None, decision="não é comando no fim da fala", **heard)
                 continue
-            if conf < MIN_CONF:
+            if conf < (WAKE_MIN_CONF if command == WAKE_WORD else MIN_CONF):
                 event("heard", command=command, decision="ignorado: confiança baixa", **heard)
                 continue
             if time.time() - last < COOLDOWN_S:
