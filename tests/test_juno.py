@@ -73,6 +73,10 @@ class WaitPasteTest(unittest.TestCase):
     def test_history_only(self):
         self.assertEqual(self.wait(b"x" * 10, b"x" * 10 + b"PIPELINE_SUMMARY outcome=history_only\n"), "no_field")
 
+    def test_nothing_transcribed(self):  # só "câmbio": o Spoken Send tira a palavra e não sobra texto
+        line = b"[03:34:51.745] DICTATION_SUMMARY asrMs=44 readyMs=54 slowest=asr outcome=empty\n"
+        self.assertEqual(self.wait(b"x" * 10, b"x" * 10 + line), "empty")
+
     def test_log_rotated(self):
         self.assertEqual(self.wait(b"x" * 500, b"PASTE_VERIFY confirmed\n"), "pasted")
 

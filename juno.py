@@ -21,6 +21,7 @@ import json
 import math
 import os
 import queue
+import re
 import subprocess
 import sys
 import time
@@ -142,9 +143,11 @@ def fluid_log_size():
 def wait_paste(since):
     """Espera o FluidVoice colar depois de `since` bytes do log.
 
-    Retorna "pasted" (colou), "no_field" (ele guardou o texto só no histórico) ou "timeout"
-    (sem resposta em PASTE_TIMEOUT_S). O 1.6.13+ registra PASTE_VERIFY; todas as versões
-    fecham o ditado com PIPELINE_SUMMARY ... outcome=<inserted|history_only|...>."""
+    Retorna "pasted" (colou), "no_field" (ele guardou o texto só no histórico), "empty" (não
+    sobrou texto: só se disse "câmbio", que o Spoken Send tira) ou "timeout" (sem resposta em
+    PASTE_TIMEOUT_S). O 1.6.13+ registra PASTE_VERIFY; todas as versões fecham o ditado com
+    PIPELINE_SUMMARY ... outcome=<inserted|history_only>, ou só DICTATION_SUMMARY ... outcome=empty
+    quando não há o que colar."""
     started = time.time()
     deadline = started + PASTE_TIMEOUT_S
     outcome = "timeout"
@@ -162,6 +165,9 @@ def wait_paste(since):
             break
         if b"outcome=history_only" in new:
             outcome = "no_field"
+            break
+        if re.search(rb"outcome=empty\b", new):
+            outcome = "empty"
             break
         time.sleep(0.1)
     event("paste", outcome=outcome, waited_ms=round((time.time() - started) * 1000))
