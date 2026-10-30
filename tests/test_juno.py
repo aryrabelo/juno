@@ -95,6 +95,10 @@ class ParseCommandTest(unittest.TestCase):
         send = " ".join(juno.SEND_PHRASE)
         self.assertEqual(juno.parse_command(["salvar", *juno.SEND_PHRASE], self.shortcuts), send)
 
+    def test_bot_name_only_on_its_own(self):
+        self.assertEqual(juno.parse_command([juno.WAKE_WORD], self.shortcuts), juno.WAKE_WORD)
+        self.assertIsNone(juno.parse_command(["[unk]", juno.WAKE_WORD], self.shortcuts))  # "a gente" -> "[unk] juno"
+
 
 class CanSendTest(unittest.TestCase):
     def test_only_with_dictation_on_this_mac(self):

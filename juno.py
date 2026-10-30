@@ -68,8 +68,10 @@ MIN_CONF = 0.80  # câmbio, "desliga" e atalhos
 # Assim, quando outro Mac por perto também ouve o câmbio, este não aperta Enter num app qualquer.
 DICTATION_RECENT_S = 60
 # O nome do bot só liga o ditado (nunca envia nem apaga). Ele dispara já no resultado parcial,
-# sem esperar a pausa; esta régua vale quando ele só aparece no resultado final.
+# sem esperar a pausa, se o parcial for só o nome por WAKE_STABLE_S seguidos: no meio de uma
+# frase o parcial muda antes disso. WAKE_MIN_CONF vale quando ele só aparece no resultado final.
 WAKE_MIN_CONF = 0.50
+WAKE_STABLE_S = 0.3
 MAX_RECORDING_S = 300
 # Silêncio a mais depois do câmbio. O resultado final do Vosk já chega após ~0,9 s de pausa.
 SEND_SILENCE_S = 0.3
@@ -94,6 +96,7 @@ CMD_ENTER = 'key code 36 using {command down}'
 
 CHUNK_S = 0.1  # 1600 amostras a 16 kHz: o resultado chega até 0,15 s antes que com 0,25 s
 SEND_SILENCE_CHUNKS = max(1, round(SEND_SILENCE_S / CHUNK_S))
+WAKE_STABLE_CHUNKS = max(1, round(WAKE_STABLE_S / CHUNK_S))
 EVENTS = Path.home() / "Library" / "Logs" / "Juno" / "events.jsonl"
 EVENTS_MAX_BYTES = 5_000_000
 VERBOSE = "--verbose" in sys.argv
@@ -503,8 +506,8 @@ def parse_command(said, shortcuts):
         return STOP_WORD  # só sozinha: no meio do ditado, um Esc cancelaria o texto
     if " ".join(said) in shortcuts:
         return " ".join(said)  # atalho: só a frase sozinha, nunca no meio de outra fala
-    if said[-1] in WAKE_WORDS:
-        return WAKE_WORD
+    if len(said) == 1 and said[0] in WAKE_WORDS:
+        return WAKE_WORD  # só sozinho: no fim de uma frase ("a gente", "o jogo") dispara à toa
     return None
 
 
@@ -577,6 +580,7 @@ def main():
     pending_send = None  # trechos de silêncio contados depois de "câmbio"; None = nada pendente
     peak = 0  # maior volume (RMS) do trecho atual, para saber se é preciso falar mais alto
     woke = False  # o nome do bot já disparou no resultado parcial deste trecho
+    wake_streak = 0  # trechos seguidos em que o parcial é só o nome do bot
     send_text = " ".join(SEND_PHRASE)
     commands = {*WAKE_WORDS, *send_words, STOP_WORD, *shortcut_words}
     stream, mic = open_mic(callback)
@@ -593,7 +597,7 @@ def main():
             if stream is not None:
                 log(f'o microfone "{mic}" parou de mandar áudio; reabrindo no microfone padrão')
                 stream.close(ignore_errors=True)
-                stream, pending_send, peak, woke = None, None, 0, False
+                stream, pending_send, peak, woke, wake_streak = None, None, 0, False, 0
                 rec.Reset()
             try:
                 stream, mic = open_mic(callback)
@@ -621,8 +625,10 @@ def main():
                     pending_send = None
                     on_send(test_only, cmd_enter)
         if not final:
-            # O nome do bot age já no parcial, ~0,7 s antes do final; o parcial não traz confiança.
-            if partial and not woke and parse_command(partial.split(), shortcuts) == WAKE_WORD:
+            # O nome do bot age já no parcial, ~0,6 s antes do final; o parcial não traz confiança.
+            is_wake = bool(partial) and parse_command(partial.split(), shortcuts) == WAKE_WORD
+            wake_streak = wake_streak + 1 if is_wake else 0
+            if not woke and wake_streak >= WAKE_STABLE_CHUNKS:
                 woke = True
                 recording = fluid_recording()
                 heard = {"words": partial.split(), "peak": peak, "recording": recording}
@@ -637,7 +643,7 @@ def main():
                     on_wake(test_only)
             continue
         level, peak = peak, 0
-        woke_in_segment, woke = woke, False
+        woke_in_segment, woke, wake_streak = woke, False, 0
         if not words:
             continue
         said = [w["word"] for w in words]

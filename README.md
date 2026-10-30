@@ -224,9 +224,15 @@ Check a word before using it:
 - **Only command words** — Vosk gets a grammar with just your command words; any
   other speech comes out as `[unk]` and is dropped, so your dictation is never
   transcribed or stored by Juno.
-- **Fast bot name** — the bot name acts on Vosk's partial result, as soon as it
-  is decoded (~0.7 s sooner than waiting for the pause), with no confidence bar:
-  a false start only opens dictation, and `cancel` / `desliga` closes it.
+- **Fast bot name** — the bot name acts on Vosk's partial result, once the
+  partial has been just the name for 0.3 s (~0.6 s sooner than waiting for the
+  pause). It must be said on its own: inside a sentence the partial changes
+  before 0.3 s, so talk in the room doesn't start dictation. A false start only
+  opens dictation, and `cancel` / `desliga` closes it.
+- **Pick a name that stands out** — with a small grammar, Vosk maps similar
+  sounds onto your words. In Portuguese, `juno` also catches "jogo", "junho",
+  "juro" and "a gente", and `jarbas` catches "já". `max`, `luna`, `zeca` and
+  `atlas` had no false starts in our tests.
 - **End of speech, enough confidence** — every other command counts only as the
   last words before a pause, with confidence 0.80. After the pause, the send
   word waits 0.3 s more and is dropped if you keep talking.
