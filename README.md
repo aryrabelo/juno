@@ -127,6 +127,23 @@ Configs from before this module (`agent_word`, `next_word`, `agents`) are conver
 by `./install.sh`: each `agent <nickname>` (Portuguese: `agente <apelido>`) becomes
 an `openbot` shortcut, plus `agent next` and `next agent`.
 
+### Only right after a send
+
+Add `"after_send": N` next to the action and the shortcut counts only when you
+start saying it within N seconds after Juno presses Enter for a send, once per
+send. With the OpenBot module that's reply-and-move-on in one breath: end with
+`over`, say `go`, and the next chat with unread replies opens.
+
+```json
+"shortcuts": {
+  "go": { "openbot": "next", "after_send": 3 }
+}
+```
+
+Outside that window the phrase does nothing, so a short everyday word is safe.
+Its events in `~/Library/Logs/Juno/events.jsonl` carry `since_send_s`, how many
+seconds after the Enter you started speaking, to help you pick N.
+
 ## 📦 Install
 
 ### Prerequisites

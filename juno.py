@@ -8,7 +8,8 @@
 "desliga" (sozinha) -> aperta Esc.
 Atalhos extras ("shortcuts" no config.json; frase dita sozinha, fora do ditado) -> aperta um
             atalho de teclado, abre um app, roda um comando ou, no módulo OpenBot, abre um agente
-            ou o próximo chat com respostas não lidas (bin/next-agent).
+            ou o próximo chat com respostas não lidas (bin/next-agent). Com "after_send": N, o
+            atalho só vale se dito até N s depois do Enter de um envio (ex.: "vai" -> próximo agente).
 
 Uso: .venv/bin/python juno.py [--test] [--cmd-enter] [--verbose]
      .venv/bin/python juno.py stats [N]   # resumo dos últimos N eventos (padrão 500)
@@ -240,17 +241,26 @@ def read_legacy_agents(path):
 
 
 def clean_shortcuts(raw):
-    """"frase" -> (tipo, valor), de "shortcuts" no config.json; descarta entradas inválidas com aviso.
+    """"frase" -> (tipo, valor, after_send), de "shortcuts" no config.json; descarta entradas
+    inválidas com aviso.
 
     Ação: {"keys": "command+s"}, {"open": "Safari"}, {"run": "comando"} ou, no módulo OpenBot,
-    {"openbot": "next"} (próximo chat com respostas não lidas) e {"openbot": "<nome do agente>"}."""
+    {"openbot": "next"} (próximo chat com respostas não lidas) e {"openbot": "<nome do agente>"}.
+    Opcional, junto da ação: "after_send": N (segundos) faz o atalho valer só se a fala começar
+    até N s depois do Enter de um envio; fora disso é None (vale a qualquer hora)."""
     shortcuts = {}
     for phrase, action in raw.items():
         words = str(phrase).lower().split()
         phrase = " ".join(words)
-        if not isinstance(action, dict) or len(action) != 1 or next(iter(action)) not in SHORTCUT_ACTIONS:
+        action = dict(action) if isinstance(action, dict) else {}
+        after_send = action.pop("after_send", None)
+        if len(action) != 1 or next(iter(action)) not in SHORTCUT_ACTIONS:
             log(f"config.json: ignorei o atalho {phrase!r}: a ação é uma só, entre "
                 f"{', '.join(SHORTCUT_ACTIONS)} (ex.: {{\"keys\": \"command+s\"}})")
+            continue
+        if after_send is not None and (type(after_send) not in (int, float) or after_send <= 0):
+            log(f'config.json: ignorei o atalho {phrase!r}: "after_send" é quantos segundos depois do '
+                f'envio o atalho vale (ex.: 3)')
             continue
         kind, value = next(iter(action.items()))
         value = "".join(c for c in str(value).strip() if c.isprintable())
@@ -268,7 +278,7 @@ def clean_shortcuts(raw):
             except SystemExit as exc:
                 log(str(exc))
                 continue
-        shortcuts[phrase] = (kind, value)
+        shortcuts[phrase] = (kind, value, after_send)
     return shortcuts
 
 
@@ -421,7 +431,7 @@ def openbot_open(target):
 
 
 def run_shortcut(test_only, phrase, action):
-    kind, value = action
+    kind, value, _ = action
     if fluid_recording():
         log(f'ditado em andamento; ignorei o atalho "{phrase}"')
         return
@@ -578,6 +588,8 @@ def main():
 
     last = 0.0
     pending_send = None  # trechos de silêncio contados depois de "câmbio"; None = nada pendente
+    since_send = None  # trechos de áudio desde o Enter do último envio; None = janela fechada
+    segment_start = None  # since_send quando começou a fala do trecho atual
     peak = 0  # maior volume (RMS) do trecho atual, para saber se é preciso falar mais alto
     woke = False  # o nome do bot já disparou no resultado parcial deste trecho
     wake_streak = 0  # trechos seguidos em que o parcial é só o nome do bot
@@ -597,7 +609,8 @@ def main():
             if stream is not None:
                 log(f'o microfone "{mic}" parou de mandar áudio; reabrindo no microfone padrão')
                 stream.close(ignore_errors=True)
-                stream, pending_send, peak, woke, wake_streak = None, None, 0, False, 0
+                stream, pending_send, since_send, segment_start = None, None, None, None
+                peak, woke, wake_streak = 0, False, 0
                 rec.Reset()
             try:
                 stream, mic = open_mic(callback)
@@ -613,6 +626,8 @@ def main():
         final = rec.AcceptWaveform(data)
         words = json.loads(rec.Result()).get("result", []) if final else []
         partial = "" if final else json.loads(rec.PartialResult()).get("partial", "")
+        if since_send is not None:
+            since_send += 1
         if pending_send is not None:
             # Contado em áudio (não em relógio): só envia depois de N trechos sem fala.
             if words or partial:
@@ -624,7 +639,12 @@ def main():
                 if pending_send >= SEND_SILENCE_CHUNKS:
                     pending_send = None
                     on_send(test_only, cmd_enter)
+                    # O áudio gravado enquanto o envio esperava a colagem ficou na fila e é anterior
+                    # ao Enter: a janela dos atalhos "after_send" só começa a contar depois dele.
+                    since_send = -audio.qsize()
         if not final:
+            if partial and segment_start is None:
+                segment_start = since_send  # a fala deste trecho começou agora
             # O nome do bot age já no parcial, ~0,6 s antes do final; o parcial não traz confiança.
             is_wake = bool(partial) and parse_command(partial.split(), shortcuts) == WAKE_WORD
             wake_streak = wake_streak + 1 if is_wake else 0
@@ -644,6 +664,7 @@ def main():
             continue
         level, peak = peak, 0
         woke_in_segment, woke, wake_streak = woke, False, 0
+        started, segment_start = (since_send if segment_start is None else segment_start), None
         if not words:
             continue
         said = [w["word"] for w in words]
@@ -658,13 +679,21 @@ def main():
         if command is None:
             event("heard", command=None, decision="não é comando no fim da fala", **heard)
             continue
+        after_send = shortcuts[command][2] if command in shortcuts else None
+        if after_send:
+            # Quantos segundos depois do Enter a fala começou: ajuda a calibrar o "after_send".
+            heard["since_send_s"] = None if started is None else round(started * CHUNK_S, 1)
+            if started is None or started > round(after_send / CHUNK_S):
+                event("heard", command=command, decision="ignorado: fora da janela depois do envio", **heard)
+                continue
         if command == send_text and not can_send(recording, idle):
             event("heard", command=command, decision="ignorado: sem ditado recente", **heard)
             continue
         if conf < (WAKE_MIN_CONF if command == WAKE_WORD else MIN_CONF):
             event("heard", command=command, decision="ignorado: confiança baixa", **heard)
             continue
-        if time.time() - last < COOLDOWN_S:
+        # Um atalho "after_send" vem logo depois do envio por definição: a janela já o limita.
+        if not after_send and time.time() - last < COOLDOWN_S:
             event("heard", command=command, decision="ignorado: cooldown", **heard)
             continue
         last = time.time()
@@ -678,6 +707,8 @@ def main():
             if not test_only:
                 press(ESCAPE, "Esc")
         else:
+            if after_send:
+                since_send = None  # um por envio: um segundo "vai" não pula mais um agente
             run_shortcut(test_only, command, shortcuts[command])
 
 

@@ -136,14 +136,22 @@ class FluidStateTest(unittest.TestCase):
 class CleanShortcutsTest(unittest.TestCase):
     def test_valid_actions_and_phrase_normalized(self):
         raw = {"Salvar": {"keys": "command+s"}, "abre  navegador": {"open": "Safari"},
-               "backup": {"run": "~/bin/backup.sh"}, "agente vendas": {"openbot": "Vendas · OPS"}}
+               "backup": {"run": "~/bin/backup.sh"}, "agente vendas": {"openbot": "Vendas · OPS"},
+               "vai": {"openbot": "next", "after_send": 3}, "já": {"keys": "command+s", "after_send": 1.5}}
         self.assertEqual(juno.clean_shortcuts(raw), {
-            "salvar": ("keys", "command+s"), "abre navegador": ("open", "Safari"),
-            "backup": ("run", "~/bin/backup.sh"), "agente vendas": ("openbot", "Vendas · OPS")})
+            "salvar": ("keys", "command+s", None), "abre navegador": ("open", "Safari", None),
+            "backup": ("run", "~/bin/backup.sh", None), "agente vendas": ("openbot", "Vendas · OPS", None),
+            "vai": ("openbot", "next", 3), "já": ("keys", "command+s", 1.5)})
 
     def test_invalid_actions_are_dropped(self):
         raw = {"a": {"teclas": "command+s"}, "b": {"keys": "command+s", "open": "Safari"},
                "c": "command+s", "d": {"open": "  "}, "e": {"keys": "hyper+s"}}
+        self.assertEqual(juno.clean_shortcuts(raw), {})
+
+    def test_after_send_must_be_positive_seconds_next_to_an_action(self):
+        raw = {"a": {"openbot": "next", "after_send": 0}, "b": {"openbot": "next", "after_send": -1},
+               "c": {"openbot": "next", "after_send": "3"}, "d": {"openbot": "next", "after_send": True},
+               "e": {"after_send": 3}}
         self.assertEqual(juno.clean_shortcuts(raw), {})
 
     def test_phrases_that_could_never_fire_are_dropped(self):
