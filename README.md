@@ -217,6 +217,10 @@ Check a word before using it:
 - **Offline recognition** — the microphone feeds 16 kHz audio (`sounddevice`) to
   [Vosk](https://alphacephei.com/vosk/), with a small model for your language.
   Nothing leaves the Mac.
+- **Follows your microphone** — Juno listens to the system's default input and
+  logs its name on start. If that mic stops sending audio for 5 s (headset
+  unplugged, input switched in macOS), Juno reopens the current default instead
+  of going silently deaf.
 - **Only command words** — Vosk gets a grammar with just your command words; any
   other speech comes out as `[unk]` and is dropped, so your dictation is never
   transcribed or stored by Juno.

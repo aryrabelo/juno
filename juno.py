@@ -69,6 +69,9 @@ WAKE_MIN_CONF = 0.80
 MAX_RECORDING_S = 300
 SEND_SILENCE_S = 0.8  # silêncio exigido depois da frase antes de enviar
 PASTE_TIMEOUT_S = 10.0  # espera máxima pelo FluidVoice colar (volta antes, assim que ele cola)
+# Sem áudio do microfone por este tempo, o aparelho sumiu (fone desconectado, troca de
+# entrada no macOS): o fluxo fica mudo para sempre, então o Juno reabre no microfone padrão.
+MIC_STALL_S = 5.0
 STOP_WORD = _setting("stop_word").lower()  # falada sozinha: aperta Esc
 # Formato antigo, quando o OpenBot tinha palavras próprias; o install.sh converte em "shortcuts".
 LEGACY_KEYS = ("agent_word", "next_word", "agents", "app", "agent_app")
@@ -490,6 +493,16 @@ def load_shortcuts():
     return shortcuts
 
 
+def open_mic(callback):
+    """Abre o microfone padrão de agora. O PortAudio guarda a lista de aparelhos de quando
+    começou; reiniciá-lo antes faz um microfone novo (ou o padrão trocado) aparecer."""
+    sd._terminate()
+    sd._initialize()
+    stream = sd.RawInputStream(samplerate=16000, blocksize=4000, dtype="int16", channels=1, callback=callback)
+    stream.start()
+    return stream, sd.query_devices(kind="input")["name"]
+
+
 def main():
     global FLUID_SHORTCUT
     if sys.argv[1:2] == ["migrate-config"]:  # usado pelo install.sh
@@ -538,62 +551,80 @@ def main():
     peak = 0  # maior volume (RMS) do trecho atual, para saber se é preciso falar mais alto
     send_text = " ".join(SEND_PHRASE)
     commands = {*WAKE_WORDS, *send_words, STOP_WORD, *shortcut_words}
-    with sd.RawInputStream(samplerate=16000, blocksize=4000, dtype="int16", channels=1, callback=callback):
-        wake_list = "/".join(WAKE_WORDS)
-        send_list = "/".join(" ".join(p) for p in SEND_PHRASES)
-        log(f'ouvindo "{wake_list}", "{send_list}", "{STOP_WORD}" e {len(shortcuts)} atalhos extras...')
-        event("start", test=test_only, shortcuts=len(shortcuts), min_conf=MIN_CONF, wake_min_conf=WAKE_MIN_CONF,
-              send_silence_s=SEND_SILENCE_S)
-        while True:
-            data = audio.get()
-            peak = max(peak, rms(data))
-            final = rec.AcceptWaveform(data)
-            words = json.loads(rec.Result()).get("result", []) if final else []
-            if pending_send is not None:
-                # Contado em áudio (não em relógio): só envia depois de N trechos sem fala.
-                speaking = words if final else json.loads(rec.PartialResult()).get("partial")
-                if speaking:
-                    log(f'"{send_text}" no meio da fala; não enviei')
-                    event("send_cancelled", reason="fala depois de câmbio")
-                    pending_send = None
-                else:
-                    pending_send += 1
-                    if pending_send >= SEND_SILENCE_CHUNKS:
-                        pending_send = None
-                        on_send(test_only, cmd_enter)
-            if not final:
+    stream, mic = open_mic(callback)
+    wake_list = "/".join(WAKE_WORDS)
+    send_list = "/".join(" ".join(p) for p in SEND_PHRASES)
+    log(f'ouvindo "{wake_list}", "{send_list}", "{STOP_WORD}" e {len(shortcuts)} atalhos extras '
+        f'no microfone "{mic}"...')
+    event("start", test=test_only, shortcuts=len(shortcuts), min_conf=MIN_CONF, wake_min_conf=WAKE_MIN_CONF,
+          send_silence_s=SEND_SILENCE_S, mic=mic)
+    while True:
+        try:
+            data = audio.get(timeout=MIC_STALL_S)
+        except queue.Empty:
+            if stream is not None:
+                log(f'o microfone "{mic}" parou de mandar áudio; reabrindo no microfone padrão')
+                stream.close(ignore_errors=True)
+                stream, pending_send, peak = None, None, 0
+                rec.Reset()
+            try:
+                stream, mic = open_mic(callback)
+            except sd.PortAudioError as exc:  # sem microfone nenhum: tenta de novo em MIC_STALL_S
+                if mic is not None:
+                    event("mic", outcome="sem microfone", mic=mic, error=str(exc))
+                    mic = None
                 continue
-            level, peak = peak, 0
-            if not words:
-                continue
-            said = [w["word"] for w in words]
-            if not commands.intersection(said):
-                continue
-            conf = words[-1]["conf"]
-            heard = {"words": said, "conf": round(conf, 2), "peak": level}
-
-            command = parse_command(said, shortcuts)
-            if command is None:
-                event("heard", command=None, decision="não é comando no fim da fala", **heard)
-                continue
-            if conf < (WAKE_MIN_CONF if command == WAKE_WORD else MIN_CONF):
-                event("heard", command=command, decision="ignorado: confiança baixa", **heard)
-                continue
-            if time.time() - last < COOLDOWN_S:
-                event("heard", command=command, decision="ignorado: cooldown", **heard)
-                continue
-            last = time.time()
-            event("heard", command=command, decision="aceito", recording=fluid_recording(), **heard)
-            log(f'ouvi "{command}" conf={conf:.2f} volume={level}')
-            if command == send_text:
-                pending_send = 0
-            elif command == WAKE_WORD:
-                on_wake(test_only)
-            elif command == STOP_WORD:
-                if not test_only:
-                    press(ESCAPE, "Esc")
+            event("mic", outcome="reaberto", mic=mic)
+            log(f'ouvindo de novo no microfone "{mic}"')
+            continue
+        peak = max(peak, rms(data))
+        final = rec.AcceptWaveform(data)
+        words = json.loads(rec.Result()).get("result", []) if final else []
+        if pending_send is not None:
+            # Contado em áudio (não em relógio): só envia depois de N trechos sem fala.
+            speaking = words if final else json.loads(rec.PartialResult()).get("partial")
+            if speaking:
+                log(f'"{send_text}" no meio da fala; não enviei')
+                event("send_cancelled", reason="fala depois de câmbio")
+                pending_send = None
             else:
-                run_shortcut(test_only, command, shortcuts[command])
+                pending_send += 1
+                if pending_send >= SEND_SILENCE_CHUNKS:
+                    pending_send = None
+                    on_send(test_only, cmd_enter)
+        if not final:
+            continue
+        level, peak = peak, 0
+        if not words:
+            continue
+        said = [w["word"] for w in words]
+        if not commands.intersection(said):
+            continue
+        conf = words[-1]["conf"]
+        heard = {"words": said, "conf": round(conf, 2), "peak": level}
+
+        command = parse_command(said, shortcuts)
+        if command is None:
+            event("heard", command=None, decision="não é comando no fim da fala", **heard)
+            continue
+        if conf < (WAKE_MIN_CONF if command == WAKE_WORD else MIN_CONF):
+            event("heard", command=command, decision="ignorado: confiança baixa", **heard)
+            continue
+        if time.time() - last < COOLDOWN_S:
+            event("heard", command=command, decision="ignorado: cooldown", **heard)
+            continue
+        last = time.time()
+        event("heard", command=command, decision="aceito", recording=fluid_recording(), **heard)
+        log(f'ouvi "{command}" conf={conf:.2f} volume={level}')
+        if command == send_text:
+            pending_send = 0
+        elif command == WAKE_WORD:
+            on_wake(test_only)
+        elif command == STOP_WORD:
+            if not test_only:
+                press(ESCAPE, "Esc")
+        else:
+            run_shortcut(test_only, command, shortcuts[command])
 
 
 if __name__ == "__main__":
