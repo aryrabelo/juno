@@ -224,9 +224,14 @@ Check a word before using it:
 - **Only command words** — Vosk gets a grammar with just your command words; any
   other speech comes out as `[unk]` and is dropped, so your dictation is never
   transcribed or stored by Juno.
-- **End of speech, high confidence** — a command counts only as the last words
-  before a pause, with confidence 0.95 (0.80 for the bot name, since a false start
-  only opens dictation). The send word also needs ~0.8 s of silence after it.
+- **Fast bot name** — the bot name acts on Vosk's partial result, as soon as it
+  is decoded (~0.7 s sooner than waiting for the pause), with no confidence bar:
+  a false start only opens dictation, and `cancel` / `desliga` closes it.
+- **End of speech, enough confidence** — every other command counts only as the
+  last words before a pause, with confidence 0.80. The send word needs 0.95 when
+  FluidVoice isn't recording, since then it would press Enter in whatever app is
+  in front. After the pause, the send word waits 0.3 s more and is dropped if you
+  keep talking.
 - **FluidVoice state** — Juno reads FluidVoice's own log
   (`~/Library/Logs/Fluid/Fluid.log`) to know whether it is recording and when it
   finished pasting (or had nothing to paste).

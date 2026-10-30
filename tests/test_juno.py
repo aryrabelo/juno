@@ -95,6 +95,19 @@ class ParseCommandTest(unittest.TestCase):
         self.assertEqual(juno.parse_command(["salvar", *juno.SEND_PHRASE], self.shortcuts), send)
 
 
+class MinConfTest(unittest.TestCase):
+    def test_send_needs_more_confidence_without_dictation(self):
+        send = " ".join(juno.SEND_PHRASE)
+        self.assertGreater(juno.min_conf(send, recording=False), juno.min_conf(send, recording=True))
+
+    def test_wake_word_has_the_lowest_bar(self):
+        wake = juno.min_conf(juno.WAKE_WORD, recording=False)
+        for command in (" ".join(juno.SEND_PHRASE), juno.STOP_WORD, "salvar"):
+            for recording in (False, True):
+                self.assertLess(wake, juno.min_conf(command, recording))
+
+
+
 class CleanShortcutsTest(unittest.TestCase):
     def test_valid_actions_and_phrase_normalized(self):
         raw = {"Salvar": {"keys": "command+s"}, "abre  navegador": {"open": "Safari"},
