@@ -228,10 +228,12 @@ Check a word before using it:
   is decoded (~0.7 s sooner than waiting for the pause), with no confidence bar:
   a false start only opens dictation, and `cancel` / `desliga` closes it.
 - **End of speech, enough confidence** — every other command counts only as the
-  last words before a pause, with confidence 0.80. The send word needs 0.95 when
-  FluidVoice isn't recording, since then it would press Enter in whatever app is
-  in front. After the pause, the send word waits 0.3 s more and is dropped if you
-  keep talking.
+  last words before a pause, with confidence 0.80. After the pause, the send
+  word waits 0.3 s more and is dropped if you keep talking.
+- **Send only where you dictated** — the send word presses Enter only if this
+  Mac's FluidVoice is recording or stopped less than 60 s ago. With Juno on two
+  Macs in the same room, both hear `over` / `câmbio`, but only the one you were
+  dictating to sends.
 - **FluidVoice state** — Juno reads FluidVoice's own log
   (`~/Library/Logs/Fluid/Fluid.log`) to know whether it is recording and when it
   finished pasting (or had nothing to paste).

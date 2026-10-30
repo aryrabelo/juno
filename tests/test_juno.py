@@ -5,6 +5,7 @@ Rodar: .venv/bin/python -m unittest discover -s tests
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -95,17 +96,37 @@ class ParseCommandTest(unittest.TestCase):
         self.assertEqual(juno.parse_command(["salvar", *juno.SEND_PHRASE], self.shortcuts), send)
 
 
-class MinConfTest(unittest.TestCase):
-    def test_send_needs_more_confidence_without_dictation(self):
-        send = " ".join(juno.SEND_PHRASE)
-        self.assertGreater(juno.min_conf(send, recording=False), juno.min_conf(send, recording=True))
+class CanSendTest(unittest.TestCase):
+    def test_only_with_dictation_on_this_mac(self):
+        self.assertTrue(juno.can_send(recording=True, idle_s=None))
+        self.assertTrue(juno.can_send(recording=False, idle_s=5))  # parou o ditado na mão e disse câmbio
+        self.assertTrue(juno.can_send(recording=False, idle_s=juno.DICTATION_RECENT_S))
+        self.assertFalse(juno.can_send(recording=False, idle_s=juno.DICTATION_RECENT_S + 1))
+        self.assertFalse(juno.can_send(recording=False, idle_s=None))  # nenhum ditado no log
 
-    def test_wake_word_has_the_lowest_bar(self):
-        wake = juno.min_conf(juno.WAKE_WORD, recording=False)
-        for command in (" ".join(juno.SEND_PHRASE), juno.STOP_WORD, "salvar"):
-            for recording in (False, True):
-                self.assertLess(wake, juno.min_conf(command, recording))
 
+class FluidStateTest(unittest.TestCase):
+    def state(self, *lines):
+        old = juno.FLUID_LOG
+        with tempfile.TemporaryDirectory() as tmp:
+            juno.FLUID_LOG = Path(tmp) / "Fluid.log"
+            juno.FLUID_LOG.write_text("".join(f"[{time.strftime('%H:%M:%S', time.localtime(time.time() - ago))}.000]"
+                                              f" [INFO] [ASRService] {msg}\n" for ago, msg in lines))
+            try:
+                return juno.fluid_state()
+            finally:
+                juno.FLUID_LOG = old
+
+    def test_recording(self):
+        self.assertEqual(self.state((30, "STOP() called"), (5, "START() called"))[0], True)
+
+    def test_seconds_since_last_dictation(self):
+        recording, idle = self.state((20, "START() called"), (8, "STOP() called"))
+        self.assertFalse(recording)
+        self.assertIn(idle, (8, 9))
+
+    def test_no_log(self):
+        self.assertEqual(self.state(), (False, None))
 
 
 class CleanShortcutsTest(unittest.TestCase):

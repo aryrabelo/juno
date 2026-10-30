@@ -63,9 +63,10 @@ SEND_PHRASES = [p.split() for p in _word_list(_setting("send_word"))]
 SEND_PHRASE = SEND_PHRASES[0]
 COOLDOWN_S = 2.0
 # Réguas de confiança: na dúvida, o Juno prefere agir (um falso começo se desfaz com "desliga").
-MIN_CONF = 0.80  # "desliga", atalhos e câmbio com o ditado gravando
-# Câmbio sem ditado aperta Enter no app da frente, em qualquer coisa: régua alta.
-SEND_IDLE_MIN_CONF = 0.95
+MIN_CONF = 0.80  # câmbio, "desliga" e atalhos
+# Câmbio só aperta Enter se o FluidVoice deste Mac está gravando ou parou há até tantos segundos.
+# Assim, quando outro Mac por perto também ouve o câmbio, este não aperta Enter num app qualquer.
+DICTATION_RECENT_S = 60
 # O nome do bot só liga o ditado (nunca envia nem apaga). Ele dispara já no resultado parcial,
 # sem esperar a pausa; esta régua vale quando ele só aparece no resultado final.
 WAKE_MIN_CONF = 0.50
@@ -299,29 +300,49 @@ def rms(chunk):
     return int(math.sqrt(sum(x * x for x in samples) / len(samples)))
 
 
-def fluid_recording():
-    """Lê o fim do log do FluidVoice para saber se o ditado está gravando."""
+def _fluid_tail():
     try:
         with FLUID_LOG.open("rb") as f:
             f.seek(0, 2)
             f.seek(max(0, f.tell() - 65536))
-            tail = f.read().decode("utf-8", "ignore")
+            return f.read().decode("utf-8", "ignore")
     except OSError:
-        return False
-    start = tail.rfind("START() called")
-    # O FluidVoice nem sempre registra "STOP() called" (ex.: app reaberto no meio de uma gravação).
-    stop = max(tail.rfind(m) for m in ("STOP() called", "Stopping recording", "Application launched"))
-    if start <= stop:
-        return False
-    # Rede de segurança: uma gravação "aberta" há muito tempo provavelmente já terminou.
-    line_start = tail.rfind("\n", 0, start) + 1
+        return ""
+
+
+def _age_s(tail, index):
+    """Segundos desde a linha do log em `index` (o FluidVoice só registra a hora do dia), ou None."""
+    line_start = tail.rfind("\n", 0, index) + 1
     try:
-        started = time.strptime(tail[line_start + 1:line_start + 9], "%H:%M:%S")
+        t = time.strptime(tail[line_start + 1:line_start + 9], "%H:%M:%S")
     except ValueError:
-        return True
+        return None
     now = time.localtime()
-    age = (now.tm_hour * 3600 + now.tm_min * 60 + now.tm_sec) - (started.tm_hour * 3600 + started.tm_min * 60 + started.tm_sec)
-    return age % 86400 < MAX_RECORDING_S  # % 86400: gravação que atravessa a meia-noite
+    seconds = (now.tm_hour - t.tm_hour) * 3600 + (now.tm_min - t.tm_min) * 60 + now.tm_sec - t.tm_sec
+    return seconds % 86400  # % 86400: atravessa a meia-noite
+
+
+def fluid_state():
+    """(está gravando, segundos desde o fim do último ditado ou None), lidos do log do FluidVoice."""
+    tail = _fluid_tail()
+    start = tail.rfind("START() called")
+    stopped = tail.rfind("STOP() called")
+    idle = _age_s(tail, stopped) if stopped >= 0 else None
+    # O FluidVoice nem sempre registra "STOP() called" (ex.: app reaberto no meio de uma gravação).
+    if start <= max(stopped, *(tail.rfind(m) for m in ("Stopping recording", "Application launched"))):
+        return False, idle
+    # Rede de segurança: uma gravação "aberta" há muito tempo provavelmente já terminou.
+    age = _age_s(tail, start)
+    return age is None or age < MAX_RECORDING_S, idle
+
+
+def fluid_recording():
+    return fluid_state()[0]
+
+
+def can_send(recording, idle_s):
+    """Câmbio vale com ditado neste Mac: gravando agora ou parado há até DICTATION_RECENT_S."""
+    return recording or (idle_s is not None and idle_s <= DICTATION_RECENT_S)
 
 
 def on_wake(test_only):
@@ -487,15 +508,6 @@ def parse_command(said, shortcuts):
     return None
 
 
-def min_conf(command, recording):
-    """Confiança mínima para agir; recording = o FluidVoice está gravando agora."""
-    if command == WAKE_WORD:
-        return WAKE_MIN_CONF
-    if command == " ".join(SEND_PHRASE) and not recording:
-        return SEND_IDLE_MIN_CONF
-    return MIN_CONF
-
-
 def load_shortcuts():
     """Atalhos válidos do config.json, sem os que têm palavra que o modelo de voz não conhece."""
     shortcuts = clean_shortcuts(_config.get("shortcuts", {}))
@@ -573,7 +585,7 @@ def main():
     log(f'ouvindo "{wake_list}", "{send_list}", "{STOP_WORD}" e {len(shortcuts)} atalhos extras '
         f'no microfone "{mic}"...')
     event("start", test=test_only, shortcuts=len(shortcuts), min_conf=MIN_CONF, wake_min_conf=WAKE_MIN_CONF,
-          send_idle_min_conf=SEND_IDLE_MIN_CONF, send_silence_s=SEND_SILENCE_S, mic=mic)
+          dictation_recent_s=DICTATION_RECENT_S, send_silence_s=SEND_SILENCE_S, mic=mic)
     while True:
         try:
             data = audio.get(timeout=MIC_STALL_S)
@@ -635,12 +647,15 @@ def main():
         command = parse_command(said, shortcuts)
         if command == WAKE_WORD and woke_in_segment:
             continue  # já tratado no parcial
-        recording = fluid_recording()
+        recording, idle = fluid_state()
         heard = {"words": said, "conf": round(conf, 2), "peak": level, "recording": recording}
         if command is None:
             event("heard", command=None, decision="não é comando no fim da fala", **heard)
             continue
-        if conf < min_conf(command, recording):
+        if command == send_text and not can_send(recording, idle):
+            event("heard", command=command, decision="ignorado: sem ditado recente", **heard)
+            continue
+        if conf < (WAKE_MIN_CONF if command == WAKE_WORD else MIN_CONF):
             event("heard", command=command, decision="ignorado: confiança baixa", **heard)
             continue
         if time.time() - last < COOLDOWN_S:
