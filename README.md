@@ -18,9 +18,10 @@
 - [💡 The idea](#-the-idea)
 - [✨ Features](#-features)
 - [🎙️ Voice commands](#️-voice-commands)
+- [➕ Extra shortcuts](#-extra-shortcuts)
 - [📦 Install](#-install)
 - [⚙️ Configuration](#️-configuration)
-- [🛠️ How it's built](#️-how-its-built)
+- [🔍 How Juno hears you](#-how-juno-hears-you)
 - [🗂️ Project layout](#️-project-layout)
 - [✅ Verification](#-verification)
 - [🚫 Non-goals](#-non-goals)
@@ -53,11 +54,11 @@ as unknown.
   e.g. `["atlas", "ata"]`, when the model mishears your first choice.
 - **Safe send** — the send word only counts at the end of what you say, followed
   by silence; if you keep talking, nothing is sent.
-- **Switch agents in [OpenBot](https://openbot.run)** — `agente <nickname>` brings
-  OpenBot to the front and opens that agent; `agente próximo` (or `próximo agente`)
-  opens the next chat with unread replies.
-- **Your words** — the bot name, the send word, the dictation shortcut, and the
-  agent nicknames all live in one `config.json`.
+- **Your own voice shortcuts** — say a phrase on its own and Juno presses a
+  keyboard shortcut, opens an app, or runs a command. See
+  [Extra shortcuts](#-extra-shortcuts).
+- **Your words** — the bot name, the send word, the dictation shortcut, and your
+  extra shortcuts all live in one `config.json`.
 - **Start at login** — the installer can open Juno in a Terminal window on login.
 
 > [!NOTE]
@@ -72,12 +73,54 @@ as unknown.
 | **bot name** (`juno` / `juno`) | Presses the FluidVoice dictation shortcut |
 | **send word** (`câmbio` / `over`), at the end, then silence | Stops dictation, waits for the paste, presses Enter |
 | **stop word** (`desliga` / `cancel`), on its own | Presses Esc |
-| **`agente <nickname>`** / **`agent <nickname>`**, on its own | Opens that agent in OpenBot (⌘K, paste name, Enter) |
-| **`próximo agente`** / **`next agent`** (either word order), on its own | Opens the next OpenBot chat with unread replies and focuses its message box |
 
-Agent commands are ignored while dictation is running.
 The send word presses Enter even when nothing is being dictated, in whatever
 window has focus.
+
+## ➕ Extra shortcuts
+
+Add your own voice shortcuts under `"shortcuts"` in `config.json`: a phrase (one or
+more words) and one action.
+
+```json
+"shortcuts": {
+  "salvar": { "keys": "command+s" },
+  "navegador": { "open": "Safari" },
+  "backup": { "run": "~/bin/backup.sh" }
+}
+```
+
+| Action | What it does |
+| --- | --- |
+| `keys` | Presses a keyboard shortcut in the app in front, e.g. `command+s`, `control+option+.` |
+| `open` | Opens (or brings to the front) an app, e.g. `Safari` |
+| `run` | Runs a shell command from your home folder, without waiting for it |
+
+A shortcut counts only when its phrase is said **on its own**, followed by a pause,
+and never while dictation is running, so the same words inside a dictated message
+do nothing. Every word must exist in the voice model (Juno skips a shortcut with an
+unknown word and says which one); a phrase that ends with the bot name or the send
+word, or that is the stop word, is skipped too. Restart Juno after editing.
+
+### OpenBot module
+
+For [OpenBot](https://openbot.run) users, a fourth action switches agents. It's
+off until you add a shortcut that uses it:
+
+```json
+"shortcuts": {
+  "próximo agente": { "openbot": "next" },
+  "agente vendas": { "openbot": "Vendas · OPS" }
+}
+```
+
+- `{"openbot": "next"}` brings OpenBot to the front, opens the first chat in the
+  sidebar with unread replies, and focuses its message box, ready to dictate.
+- `{"openbot": "<agent name>"}` opens that agent through OpenBot's ⌘K search.
+
+Configs from before this module (`agent_word`, `next_word`, `agents`) are converted
+by `./install.sh`: each `agente <nickname>` becomes an `openbot` shortcut, plus
+`agente próximo` and `próximo agente`.
 
 ## 📦 Install
 
@@ -135,15 +178,11 @@ the default of your language.
   "send_word": "câmbio",
   "stop_word": "desliga",
   "dictation_shortcut": "option+command+.",
-  "agent_word": "agente",
-  "next_word": "próximo",
-  "app": "OpenBot",
-  "agents": { "vendas": "Vendas · OPS" }
+  "shortcuts": {}
 }
 ```
 
-The English defaults are `juno` (bot name), `over` (send), `cancel` (Esc), and
-`agent` / `next` (`agent <nickname>`, `next agent`).
+The English defaults are `juno` (bot name), `over` (send) and `cancel` (Esc).
 
 | Key | What it is |
 | --- | --- |
@@ -152,9 +191,7 @@ The English defaults are `juno` (bot name), `over` (send), `cancel` (Esc), and
 | `send_word` | Sends the message. A word or a list; FluidVoice removes only its own Spoken Send word from the text |
 | `stop_word` | Presses Esc |
 | `dictation_shortcut` | FluidVoice's shortcut, e.g. `control+option+.` |
-| `agent_word` / `next_word` | The words in `agente <nickname>` and `agente próximo` (`agent` / `next` in English) |
-| `app` | App whose ⌘K search opens agents |
-| `agents` | Spoken nickname (one word) → agent name as typed in search |
+| `shortcuts` | Your [extra shortcuts](#-extra-shortcuts): phrase → action |
 
 Check a word before using it:
 
@@ -170,24 +207,31 @@ Check a word before using it:
   command words are logged, never your dictation.
 - `--cmd-enter` also presses ⌘Enter after Enter, for apps that send that way.
 
-## 🛠️ How it's built
+## 🔍 How Juno hears you
 
-- **`juno.py`** — one Python script. A Vosk recognizer with a tiny grammar (just
-  the command words) runs on 16 kHz audio from `sounddevice`. A command counts
-  only as the last word before a pause, with high confidence.
-- **Keys** — sent through `osascript` / System Events. Agent names are pasted
-  (⌘V) instead of typed, so `·` and accents survive any keyboard layout.
-- **FluidVoice state** — read from FluidVoice's own log, to know whether it is
-  recording and when it finished pasting.
-- **`next-agent.swift`** — a small helper compiled at install that reads the
-  OpenBot sidebar through the Accessibility API, opens the first chat showing
-  "N new replies", and focuses its message box so the next dictation lands there.
+- **Offline recognition** — the microphone feeds 16 kHz audio (`sounddevice`) to
+  [Vosk](https://alphacephei.com/vosk/), with a small model for your language.
+  Nothing leaves the Mac.
+- **Only command words** — Vosk gets a grammar with just your command words; any
+  other speech comes out as `[unk]` and is dropped, so your dictation is never
+  transcribed or stored by Juno.
+- **End of speech, high confidence** — a command counts only as the last words
+  before a pause, with confidence 0.95 (0.80 for the bot name, since a false start
+  only opens dictation). The send word also needs ~0.8 s of silence after it.
+- **FluidVoice state** — Juno reads FluidVoice's own log
+  (`~/Library/Logs/Fluid/Fluid.log`) to know whether it is recording and when it
+  finished pasting (or had nothing to paste).
+- **Keys** — sent through `osascript` / System Events. OpenBot agent names are
+  pasted (⌘V) instead of typed, so `·` and accents survive any keyboard layout.
+- **`next-agent.swift`** — the OpenBot module's helper, compiled at install. It
+  reads the OpenBot sidebar through the Accessibility API, opens the first chat
+  showing "N new replies", and focuses its message box.
 
 ## 🗂️ Project layout
 
 ```
 juno.py                  the listener
-next-agent.swift         "agente próximo" / "next agent" helper (compiled to bin/)
+next-agent.swift         OpenBot module helper (compiled to bin/)
 install.sh               setup in Portuguese or English, configuration, start at login
 config.example.pt.json   default configuration in Portuguese
 config.example.en.json   default configuration in English

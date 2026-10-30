@@ -37,7 +37,7 @@ swiftc -O -o /tmp/next-agent next-agent.swift   # if you changed the helper
 
 ```
 juno.py            the listener (one file, on purpose)
-next-agent.swift   "agente próximo" helper
+next-agent.swift   OpenBot module helper ({"openbot": "next"})
 install.sh         setup and configuration
 tests/             unit tests for the pure parts
 ```

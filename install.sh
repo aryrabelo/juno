@@ -98,28 +98,15 @@ print(c["wake_word"]); print(c["send_word"]); print(c["dictation_shortcut"])' "$
 import json, sys
 config = json.load(open(sys.argv[1], encoding="utf-8"))
 config["wake_word"], config["send_word"], config["dictation_shortcut"] = sys.argv[2:5]
-config["agents"] = {}
 json.dump(config, open("config.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 PY
 fi
 
-# Uma configuração só: leva os agentes do agentes.tsv antigo para o config.json.
-if [ -f agentes.tsv ]; then
-  .venv/bin/python - <<'PY'
-import json, subprocess, sys
-config = json.load(open("config.json", encoding="utf-8"))
-old = json.loads(subprocess.run([sys.executable, "-W", "ignore", "juno.py", "migrate-agents", "agentes.tsv"],
-                                capture_output=True, text=True, check=True).stdout)
-config["agents"] = {**old, **config.get("agents", {})}
-if "agent_app" in config:
-    config.setdefault("app", config.pop("agent_app"))
-json.dump(config, open("config.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-print(f"agentes.tsv migrado para config.json ({len(old)} agentes); o antigo ficou em agentes.tsv.migrated")
-PY
-  mv agentes.tsv agentes.tsv.migrated
-fi
+# Formato antigo: "agente <apelido>" (agents no config.json ou agentes.tsv) vira atalho do
+# módulo OpenBot em "shortcuts". Não faz nada num config.json já no formato novo.
+.venv/bin/python -W ignore juno.py migrate-config
 
-# Ajudante do "agente próximo": lê a barra lateral do app pela Acessibilidade.
+# Ajudante do módulo OpenBot ({"openbot": "next"}): lê a barra lateral pela Acessibilidade.
 if command -v swiftc >/dev/null; then
   mkdir -p bin
   swiftc -O -o bin/next-agent next-agent.swift

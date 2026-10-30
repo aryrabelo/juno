@@ -82,19 +82,63 @@ class WaitPasteTest(unittest.TestCase):
 
 
 class ParseCommandTest(unittest.TestCase):
-    def test_next_agent_either_order(self):
-        expected = f"{juno.AGENT_WORD} {juno.NEXT_WORD}"
-        self.assertEqual(juno.parse_command([juno.AGENT_WORD, juno.NEXT_WORD], {}), expected)
-        self.assertEqual(juno.parse_command([juno.NEXT_WORD, juno.AGENT_WORD], {}), expected)
+    shortcuts = {"salvar": ("keys", "command+s"), "agente próximo": ("openbot", "next")}
 
-    def test_next_agent_only_on_its_own(self):
-        self.assertIsNone(juno.parse_command(["[unk]", juno.NEXT_WORD, juno.AGENT_WORD], {}))
-        self.assertIsNone(juno.parse_command([juno.NEXT_WORD], {}))
+    def test_shortcut_only_on_its_own(self):
+        self.assertEqual(juno.parse_command(["salvar"], self.shortcuts), "salvar")
+        self.assertEqual(juno.parse_command(["agente", "próximo"], self.shortcuts), "agente próximo")
+        self.assertIsNone(juno.parse_command(["[unk]", "salvar"], self.shortcuts))
+        self.assertIsNone(juno.parse_command(["próximo", "agente"], self.shortcuts))
 
-    def test_agent_nickname_keeps_order(self):
-        agents = {"vendas": "Vendas · OPS"}
-        self.assertEqual(juno.parse_command([juno.AGENT_WORD, "vendas"], agents), f"{juno.AGENT_WORD} vendas")
-        self.assertIsNone(juno.parse_command(["vendas", juno.AGENT_WORD], agents))
+    def test_send_word_at_the_end_wins(self):
+        send = " ".join(juno.SEND_PHRASE)
+        self.assertEqual(juno.parse_command(["salvar", *juno.SEND_PHRASE], self.shortcuts), send)
+
+
+class CleanShortcutsTest(unittest.TestCase):
+    def test_valid_actions_and_phrase_normalized(self):
+        raw = {"Salvar": {"keys": "command+s"}, "abre  navegador": {"open": "Safari"},
+               "backup": {"run": "~/bin/backup.sh"}, "agente vendas": {"openbot": "Vendas · OPS"}}
+        self.assertEqual(juno.clean_shortcuts(raw), {
+            "salvar": ("keys", "command+s"), "abre navegador": ("open", "Safari"),
+            "backup": ("run", "~/bin/backup.sh"), "agente vendas": ("openbot", "Vendas · OPS")})
+
+    def test_invalid_actions_are_dropped(self):
+        raw = {"a": {"teclas": "command+s"}, "b": {"keys": "command+s", "open": "Safari"},
+               "c": "command+s", "d": {"open": "  "}, "e": {"keys": "hyper+s"}}
+        self.assertEqual(juno.clean_shortcuts(raw), {})
+
+    def test_phrases_that_could_never_fire_are_dropped(self):
+        raw = {juno.STOP_WORD: {"keys": "command+s"},
+               f"abre {juno.WAKE_WORD}": {"open": "Safari"},
+               " ".join(["salvar", *juno.SEND_PHRASE]): {"keys": "command+s"}}
+        self.assertEqual(juno.clean_shortcuts(raw), {})
+
+
+class MigrateConfigTest(unittest.TestCase):
+    def test_old_openbot_keys_become_shortcuts(self):
+        old = {"language": "pt", "wake_word": "lila", "agent_word": "agente", "next_word": "próximo",
+               "app": "OpenBot", "agents": {"vendas": "Vendas · OPS"}}
+        config, changed = juno.migrate_config(old)
+        self.assertTrue(changed)
+        self.assertEqual(config, {"language": "pt", "wake_word": "lila", "shortcuts": {
+            "agente próximo": {"openbot": "next"}, "próximo agente": {"openbot": "next"},
+            "agente vendas": {"openbot": "Vendas · OPS"}}})
+
+    def test_language_default_words_and_existing_shortcut_kept(self):
+        old = {"language": "en", "agents": {"sales": "Sales"}, "shortcuts": {"agent sales": {"open": "Mail"}}}
+        config, _ = juno.migrate_config(old)
+        self.assertEqual(config["shortcuts"], {"agent sales": {"open": "Mail"}, "agent next": {"openbot": "next"},
+                                               "next agent": {"openbot": "next"}})
+
+    def test_legacy_tsv_merged_config_wins(self):
+        config, _ = juno.migrate_config({"agents": {"vendas": "Novo"}}, {"vendas": "Velho", "pauta": "YT-Pauta"})
+        self.assertEqual(config["shortcuts"]["agente vendas"], {"openbot": "Novo"})
+        self.assertEqual(config["shortcuts"]["agente pauta"], {"openbot": "YT-Pauta"})
+
+    def test_new_format_untouched(self):
+        new = {"language": "pt", "shortcuts": {"salvar": {"keys": "command+s"}}}
+        self.assertEqual(juno.migrate_config(new), (new, False))
 
 
 

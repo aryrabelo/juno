@@ -4,11 +4,5 @@
   "send_word": "over",
   "stop_word": "cancel",
   "dictation_shortcut": "option+command+.",
-  "agent_word": "agent",
-  "next_word": "next",
-  "app": "OpenBot",
-  "agents": {
-    "sales": "Sales · OPS",
-    "calendar": "Assistant"
-  }
+  "shortcuts": {}
 }

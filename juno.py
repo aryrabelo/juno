@@ -5,12 +5,14 @@
 "câmbio" (no fim da fala, seguido de silêncio) -> se o FluidVoice estiver gravando, para o
             ditado (o Spoken Send dele tira "câmbio" do texto) e espera colar; depois aperta
             Enter (e, com --cmd-enter, também ⌘Enter).
-"agente <apelido>" (fala sozinha, fora do ditado) -> traz o app para a frente, abre a busca (⌘K),
-            cola o nome do agente cadastrado em "agents" no config.json e aperta Enter.
-"agente próximo" -> abre o primeiro chat da barra lateral com respostas não lidas (bin/next-agent).
+"desliga" (sozinha) -> aperta Esc.
+Atalhos extras ("shortcuts" no config.json; frase dita sozinha, fora do ditado) -> aperta um
+            atalho de teclado, abre um app, roda um comando ou, no módulo OpenBot, abre um agente
+            ou o próximo chat com respostas não lidas (bin/next-agent).
 
 Uso: .venv/bin/python juno.py [--test] [--cmd-enter] [--verbose]
      .venv/bin/python juno.py stats [N]   # resumo dos últimos N eventos (padrão 500)
+     .venv/bin/python juno.py migrate-config   # config.json antigo (agente/agents) -> atalhos
 
 Eventos (JSON por linha) em ~/Library/Logs/Juno/events.jsonl: cada trecho reconhecido, com
 confiança e volume, se virou ação ou por que foi ignorado, e quanto cada ação levou. Só ficam
@@ -68,9 +70,11 @@ MAX_RECORDING_S = 300
 SEND_SILENCE_S = 0.8  # silêncio exigido depois da frase antes de enviar
 PASTE_TIMEOUT_S = 10.0  # espera máxima pelo FluidVoice colar (volta antes, assim que ele cola)
 STOP_WORD = _setting("stop_word").lower()  # falada sozinha: aperta Esc
-AGENT_WORD = _setting("agent_word").lower()
-AGENT_APP = _config.get("app", _config.get("agent_app", "OpenBot"))  # app cuja busca (⌘K) abre o agente
-NEXT_WORD = _setting("next_word").lower()  # "agente próximo": próximo chat não lido
+# Formato antigo, quando o OpenBot tinha palavras próprias; o install.sh converte em "shortcuts".
+LEGACY_KEYS = ("agent_word", "next_word", "agents", "app", "agent_app")
+LEGACY_OPENBOT_WORDS = {"pt": ("agente", "próximo"), "en": ("agent", "next")}
+SHORTCUT_ACTIONS = ("keys", "open", "run", "openbot")
+OPENBOT_APP = "OpenBot"
 NEXT_AGENT = HERE / "bin" / "next-agent"  # compilado pelo install.sh a partir de next-agent.swift
 
 DICTATION_SHORTCUT = _setting("dictation_shortcut")  # atalho do FluidVoice
@@ -182,20 +186,20 @@ KEY_CODES = {".": 47, ",": 43, "/": 44, ";": 41, "'": 39, "-": 27, "=": 24, "spa
              "return": 36, "enter": 36, "tab": 48, "escape": 53, "esc": 53}
 
 
-def shortcut_script(shortcut):
+def shortcut_script(shortcut, where="dictation_shortcut"):
     """'control+option+.' -> trecho AppleScript do System Events ('key code 47 using {...}')."""
     parts = [p.strip().lower() for p in shortcut.split("+")]
     *mods, key = parts
     try:
         using = sorted({MODIFIERS[m] for m in mods})
     except KeyError as exc:
-        raise SystemExit(f"config.json: modificador desconhecido em dictation_shortcut: {exc}")
+        raise SystemExit(f"config.json: modificador desconhecido em {where}: {exc}")
     if key in KEY_CODES:
         action = f"key code {KEY_CODES[key]}"
     elif len(key) == 1 and key.isalnum():
         action = f'keystroke "{key}"'
     else:
-        raise SystemExit(f"config.json: tecla desconhecida em dictation_shortcut: {key!r}")
+        raise SystemExit(f"config.json: tecla desconhecida em {where}: {key!r}")
     if using:
         action += " using {" + ", ".join(f"{m} down" for m in using) + "}"
     return action
@@ -224,12 +228,60 @@ def read_legacy_agents(path):
     return raw
 
 
-def load_agents():
-    if "agents" in _config:
-        return clean_agents(_config["agents"], "config.json")
-    if LEGACY_AGENTS_FILE.exists():  # instalação antiga ainda não migrada
-        return clean_agents(read_legacy_agents(LEGACY_AGENTS_FILE), "agentes.tsv")
-    return {}
+def clean_shortcuts(raw):
+    """"frase" -> (tipo, valor), de "shortcuts" no config.json; descarta entradas inválidas com aviso.
+
+    Ação: {"keys": "command+s"}, {"open": "Safari"}, {"run": "comando"} ou, no módulo OpenBot,
+    {"openbot": "next"} (próximo chat com respostas não lidas) e {"openbot": "<nome do agente>"}."""
+    shortcuts = {}
+    for phrase, action in raw.items():
+        words = str(phrase).lower().split()
+        phrase = " ".join(words)
+        if not isinstance(action, dict) or len(action) != 1 or next(iter(action)) not in SHORTCUT_ACTIONS:
+            log(f"config.json: ignorei o atalho {phrase!r}: a ação é uma só, entre "
+                f"{', '.join(SHORTCUT_ACTIONS)} (ex.: {{\"keys\": \"command+s\"}})")
+            continue
+        kind, value = next(iter(action.items()))
+        value = "".join(c for c in str(value).strip() if c.isprintable())
+        if not words or not value:
+            log(f"config.json: ignorei o atalho {phrase!r}: frase e valor obrigatórios")
+            continue
+        # Essas frases nunca chegariam ao atalho: o nome do bot, o envio e o Esc vêm antes.
+        if words == [STOP_WORD] or words[-1] in WAKE_WORDS or any(words[-len(p):] == p for p in SEND_PHRASES):
+            log(f"config.json: ignorei o atalho {phrase!r}: termina no nome do bot ou na palavra de envio, "
+                f"ou é a palavra que aperta Esc")
+            continue
+        if kind == "keys":
+            try:
+                shortcut_script(value, f"atalho {phrase!r}")
+            except SystemExit as exc:
+                log(str(exc))
+                continue
+        shortcuts[phrase] = (kind, value)
+    return shortcuts
+
+
+def migrate_config(config, legacy_agents=None):
+    """Formato antigo (agent_word, next_word, agents, app; ou agentes.tsv) -> atalhos do módulo
+    OpenBot em "shortcuts". Devolve (config, mudou?).
+
+    "agente <apelido>" vira {"openbot": "<nome>"}; "agente próximo" e "próximo agente" viram
+    {"openbot": "next"}. Um atalho que já existe com a mesma frase não é trocado."""
+    if not legacy_agents and not any(k in config for k in LEGACY_KEYS):
+        return config, False
+    config = dict(config)
+    agent_word, next_word = LEGACY_OPENBOT_WORDS.get(config.get("language", "pt"), LEGACY_OPENBOT_WORDS["pt"])
+    agent_word = str(config.pop("agent_word", agent_word)).lower()
+    next_word = str(config.pop("next_word", next_word)).lower()
+    agents = {**clean_agents(legacy_agents or {}, "agentes.tsv"), **clean_agents(config.pop("agents", {}), "config.json")}
+    config.pop("app", None)
+    config.pop("agent_app", None)
+    shortcuts = dict(config.get("shortcuts", {}))
+    for phrase, target in [(f"{agent_word} {next_word}", "next"), (f"{next_word} {agent_word}", "next"),
+                           *((f"{agent_word} {alias}", name) for alias, name in agents.items())]:
+        shortcuts.setdefault(phrase, {"openbot": target})
+    config["shortcuts"] = shortcuts
+    return config, True
 
 
 def rms(chunk):
@@ -290,28 +342,26 @@ def on_send(test_only, cmd_enter):
 
 
 def bring_app_front():
-    """Traz o AGENT_APP para a frente e confere: ⌘K + Enter em outro app (navegador, Slack,
+    """Traz o OpenBot para a frente e confere: ⌘K + Enter em outro app (navegador, Slack,
     editor) faria outra coisa."""
-    result = run_script(f'tell application "{AGENT_APP}" to activate')
+    result = run_script(f'tell application "{OPENBOT_APP}" to activate')
     if result.returncode != 0:
-        log(f"não consegui abrir o {AGENT_APP}: {result.stderr.strip()}")
+        log(f"não consegui abrir o {OPENBOT_APP}: {result.stderr.strip()}")
         return False
     time.sleep(0.4)
     front = run_script('tell application "System Events" to get name of first process whose frontmost is true')
-    if front.stdout.strip() != AGENT_APP:
-        log(f"{AGENT_APP} não ficou na frente ({front.stdout.strip() or '?'}); não troquei de agente")
+    if front.stdout.strip() != OPENBOT_APP:
+        log(f"{OPENBOT_APP} não ficou na frente ({front.stdout.strip() or '?'}); não troquei de agente")
         return False
     return True
 
 
-def on_next(test_only):
-    if fluid_recording():
-        log("ditado em andamento; não troquei de agente")
-        return
+def openbot_next(test_only):
+    """Módulo OpenBot: abre o primeiro chat com respostas não lidas e foca a caixa de mensagem."""
     if not NEXT_AGENT.exists():
         log(f"falta {NEXT_AGENT}: rode ./install.sh (precisa do swiftc)")
         return
-    args = [str(NEXT_AGENT), AGENT_APP] if not test_only else [str(NEXT_AGENT), "--dry-run", AGENT_APP]
+    args = [str(NEXT_AGENT), OPENBOT_APP] if not test_only else [str(NEXT_AGENT), "--dry-run", OPENBOT_APP]
     if not test_only and not bring_app_front():
         return
     started = time.time()
@@ -328,12 +378,8 @@ def on_next(test_only):
         log(f"falha ao procurar o próximo agente: {result.stderr.strip()}")
 
 
-def on_agent(test_only, target):
-    if fluid_recording():
-        log("ditado em andamento; não troquei de agente")
-        return
-    if test_only:
-        return
+def openbot_open(target):
+    """Módulo OpenBot: abre o agente `target` pela busca (⌘K)."""
     if not bring_app_front():
         return
     press(SEARCH, "⌘K (busca)")
@@ -341,6 +387,34 @@ def on_agent(test_only, target):
     type_text(target)
     time.sleep(0.8)
     press(ENTER, "Enter")
+
+
+def run_shortcut(test_only, phrase, action):
+    kind, value = action
+    if fluid_recording():
+        log(f'ditado em andamento; ignorei o atalho "{phrase}"')
+        return
+    if kind == "openbot" and value == "next":
+        openbot_next(test_only)  # no --test só procura, sem abrir
+        return
+    if test_only:
+        log(f'teste: o atalho "{phrase}" faria {kind} {value!r}')
+        return
+    if kind == "keys":
+        press(shortcut_script(value), value)
+    elif kind == "open":
+        result = subprocess.run(["open", "-a", value], capture_output=True, text=True)
+        event("open", app=value, ok=result.returncode == 0, error=result.stderr.strip() or None)
+        if result.returncode != 0:
+            log(f"não consegui abrir {value}: {result.stderr.strip()}")
+    elif kind == "run":
+        # Sem esperar: um comando demorado não pode travar a escuta.
+        subprocess.Popen(value, shell=True, cwd=Path.home(), start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        event("run", command=value)
+    else:
+        log(f"-> {value}")
+        openbot_open(value)
 
 
 def stats(n):
@@ -392,25 +466,41 @@ def check_words(words, model=MODEL):
             or f"missing in vocabulary: '{w}'" in result.stderr]
 
 
-def parse_command(said, agents):
+def parse_command(said, shortcuts):
     """Palavras de um trecho (antes de uma pausa) -> comando, ou None. Só vale como fim da fala."""
     if any(said[-len(p):] == p for p in SEND_PHRASES):
         return " ".join(SEND_PHRASE)
     if said == [STOP_WORD]:
         return STOP_WORD  # só sozinha: no meio do ditado, um Esc cancelaria o texto
-    if said in ([AGENT_WORD, NEXT_WORD], [NEXT_WORD, AGENT_WORD]):  # "próximo agente" também vale
-        return f"{AGENT_WORD} {NEXT_WORD}"
-    if len(said) == 2 and said[0] == AGENT_WORD and said[1] in agents:
-        return f"{AGENT_WORD} {said[1]}"  # só a frase sozinha, nunca no meio de outra fala
+    if " ".join(said) in shortcuts:
+        return " ".join(said)  # atalho: só a frase sozinha, nunca no meio de outra fala
     if said[-1] in WAKE_WORDS:
         return WAKE_WORD
     return None
 
 
+def load_shortcuts():
+    """Atalhos válidos do config.json, sem os que têm palavra que o modelo de voz não conhece."""
+    shortcuts = clean_shortcuts(_config.get("shortcuts", {}))
+    unknown = set(check_words(sorted({w for p in shortcuts for w in p.split()}))) if shortcuts else set()
+    for phrase in [p for p in shortcuts if unknown.intersection(p.split())]:
+        missing = ", ".join(sorted(unknown.intersection(phrase.split())))
+        log(f'ignorei o atalho "{phrase}": o modelo de voz não conhece {missing}')
+        del shortcuts[phrase]
+    return shortcuts
+
+
 def main():
     global FLUID_SHORTCUT
-    if sys.argv[1:2] == ["migrate-agents"]:
-        print(json.dumps(clean_agents(read_legacy_agents(Path(sys.argv[2])), sys.argv[2]), ensure_ascii=False))
+    if sys.argv[1:2] == ["migrate-config"]:  # usado pelo install.sh
+        legacy = read_legacy_agents(LEGACY_AGENTS_FILE) if LEGACY_AGENTS_FILE.exists() else None
+        config, changed = migrate_config(_config, legacy)
+        if changed:
+            CONFIG_FILE.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            if legacy is not None:
+                LEGACY_AGENTS_FILE.rename(LEGACY_AGENTS_FILE.with_name("agentes.tsv.migrated"))
+            print(f'config.json: "agente ..." agora são atalhos do módulo OpenBot em "shortcuts" '
+                  f'({len(config["shortcuts"])} atalhos)')
         return
     if sys.argv[1:2] == ["model-name"]:  # usado pelo install.sh: juno.py model-name en
         print(MODELS[sys.argv[2]])
@@ -430,10 +520,12 @@ def main():
     test_only = "--test" in sys.argv
     cmd_enter = "--cmd-enter" in sys.argv
     SetLogLevel(-1)
-    agents = load_agents()
+    if any(k in _config for k in LEGACY_KEYS) or LEGACY_AGENTS_FILE.exists():
+        log('config.json no formato antigo (agente/agents): rode ./install.sh para virar atalhos em "shortcuts"')
+    shortcuts = load_shortcuts()
     send_words = [w for p in SEND_PHRASES for w in p]
-    grammar = json.dumps([*WAKE_WORDS, *send_words, STOP_WORD, AGENT_WORD, NEXT_WORD, *agents, "[unk]"],
-                         ensure_ascii=False)
+    shortcut_words = sorted({w for p in shortcuts for w in p.split()})
+    grammar = json.dumps([*WAKE_WORDS, *send_words, STOP_WORD, *shortcut_words, "[unk]"], ensure_ascii=False)
     rec = KaldiRecognizer(Model(str(MODEL)), 16000, grammar)
     rec.SetWords(True)
     audio = queue.Queue()
@@ -445,12 +537,12 @@ def main():
     pending_send = None  # trechos de silêncio contados depois de "câmbio"; None = nada pendente
     peak = 0  # maior volume (RMS) do trecho atual, para saber se é preciso falar mais alto
     send_text = " ".join(SEND_PHRASE)
-    commands = {*WAKE_WORDS, AGENT_WORD, *send_words, STOP_WORD, *agents}
+    commands = {*WAKE_WORDS, *send_words, STOP_WORD, *shortcut_words}
     with sd.RawInputStream(samplerate=16000, blocksize=4000, dtype="int16", channels=1, callback=callback):
         wake_list = "/".join(WAKE_WORDS)
         send_list = "/".join(" ".join(p) for p in SEND_PHRASES)
-        log(f'ouvindo "{wake_list}", "{send_list}", "{STOP_WORD}" e "{AGENT_WORD} <apelido>" ({len(agents)} agentes)...')
-        event("start", test=test_only, agents=len(agents), min_conf=MIN_CONF, wake_min_conf=WAKE_MIN_CONF,
+        log(f'ouvindo "{wake_list}", "{send_list}", "{STOP_WORD}" e {len(shortcuts)} atalhos extras...')
+        event("start", test=test_only, shortcuts=len(shortcuts), min_conf=MIN_CONF, wake_min_conf=WAKE_MIN_CONF,
               send_silence_s=SEND_SILENCE_S)
         while True:
             data = audio.get()
@@ -480,7 +572,7 @@ def main():
             conf = words[-1]["conf"]
             heard = {"words": said, "conf": round(conf, 2), "peak": level}
 
-            command = parse_command(said, agents)
+            command = parse_command(said, shortcuts)
             if command is None:
                 event("heard", command=None, decision="não é comando no fim da fala", **heard)
                 continue
@@ -500,12 +592,8 @@ def main():
             elif command == STOP_WORD:
                 if not test_only:
                     press(ESCAPE, "Esc")
-            elif command == f"{AGENT_WORD} {NEXT_WORD}":
-                on_next(test_only)
             else:
-                target = agents[said[1]]
-                log(f"-> {target}")
-                on_agent(test_only, target)
+                run_shortcut(test_only, command, shortcuts[command])
 
 
 if __name__ == "__main__":
