@@ -46,12 +46,13 @@ as unknown.
 
 - **Start dictation by name** — say `juno` (or any name you pick) and Juno presses
   FluidVoice's dictation shortcut.
-- **Send by voice** — end with `câmbio` and a short pause: Juno stops dictation,
-  waits for FluidVoice to paste the text, and presses Enter — in any app:
-  terminals, browsers, and Electron apps included.
-- **Cancel by voice** — say `desliga` on its own and Juno presses Esc.
+- **Send by voice** — end with `over` (Portuguese: `câmbio`) and a short pause:
+  Juno stops dictation, waits for FluidVoice to paste the text, and presses
+  Enter — in any app: terminals, browsers, and Electron apps included.
+- **Cancel by voice** — say `cancel` (Portuguese: `desliga`) on its own and Juno
+  presses Esc.
 - **Several words per command** — give the bot name or the send word as a list,
-  e.g. `["atlas", "ata"]`, when the model mishears your first choice.
+  e.g. `["juno", "june"]`, when the model mishears your first choice.
 - **Safe send** — the send word only counts at the end of what you say, followed
   by silence; if you keep talking, nothing is sent.
 - **Your own voice shortcuts** — say a phrase on its own and Juno presses a
@@ -84,8 +85,8 @@ more words) and one action.
 
 ```json
 "shortcuts": {
-  "salvar": { "keys": "command+s" },
-  "navegador": { "open": "Safari" },
+  "save": { "keys": "command+s" },
+  "browser": { "open": "Safari" },
   "backup": { "run": "~/bin/backup.sh" }
 }
 ```
@@ -109,8 +110,8 @@ off until you add a shortcut that uses it:
 
 ```json
 "shortcuts": {
-  "próximo agente": { "openbot": "next" },
-  "agente vendas": { "openbot": "Vendas · OPS" }
+  "next agent": { "openbot": "next" },
+  "agent sales": { "openbot": "Sales · OPS" }
 }
 ```
 
@@ -119,8 +120,8 @@ off until you add a shortcut that uses it:
 - `{"openbot": "<agent name>"}` opens that agent through OpenBot's ⌘K search.
 
 Configs from before this module (`agent_word`, `next_word`, `agents`) are converted
-by `./install.sh`: each `agente <nickname>` becomes an `openbot` shortcut, plus
-`agente próximo` and `próximo agente`.
+by `./install.sh`: each `agent <nickname>` (Portuguese: `agente <apelido>`) becomes
+an `openbot` shortcut, plus `agent next` and `next agent`.
 
 ## 📦 Install
 
@@ -167,27 +168,27 @@ JUNO_LANGUAGE=en ./install.sh
 
 ## ⚙️ Configuration
 
-Everything is in `config.json`, created from `config.example.pt.json` or
-`config.example.en.json`. Restart Juno after editing it. A key you leave out takes
+Everything is in `config.json`, created from `config.example.en.json` or
+`config.example.pt.json`. Restart Juno after editing it. A key you leave out takes
 the default of your language.
 
 ```json
 {
-  "language": "pt",
+  "language": "en",
   "wake_word": "juno",
-  "send_word": "câmbio",
-  "stop_word": "desliga",
+  "send_word": "over",
+  "stop_word": "cancel",
   "dictation_shortcut": "option+command+.",
   "shortcuts": {}
 }
 ```
 
-The English defaults are `juno` (bot name), `over` (send) and `cancel` (Esc).
+The Portuguese defaults are `juno` (bot name), `câmbio` (send) and `desliga` (Esc).
 
 | Key | What it is |
 | --- | --- |
-| `language` | `pt` (Brazilian Portuguese) or `en` (English): picks the voice model and the default words. Missing means `pt` |
-| `wake_word` | The bot's name; starts dictation. A word or a list, e.g. `["atlas", "ata"]` |
+| `language` | `en` (English) or `pt` (Brazilian Portuguese): picks the voice model and the default words. Missing means `pt` |
+| `wake_word` | The bot's name; starts dictation. A word or a list, e.g. `["juno", "june"]` |
 | `send_word` | Sends the message. A word or a list; FluidVoice removes only its own Spoken Send word from the text |
 | `stop_word` | Presses Esc |
 | `dictation_shortcut` | FluidVoice's shortcut, e.g. `control+option+.` |
@@ -196,8 +197,8 @@ The English defaults are `juno` (bot name), `over` (send) and `cancel` (Esc).
 Check a word before using it:
 
 ```sh
-.venv/bin/python juno.py check-words sexta                 # in your config's language
-.venv/bin/python juno.py check-words --language en friday  # in another language
+.venv/bin/python juno.py check-words friday                 # in your config's language
+.venv/bin/python juno.py check-words --language pt sexta    # in another language
 ```
 
 ### Advanced

@@ -25,7 +25,9 @@ few command words offline; it sends key presses to the frontmost app through
 System Events and reads FluidVoice's log file. It makes no network requests at
 runtime and has no telemetry — the installer downloads Python packages and the
 Vosk model over HTTPS. The most relevant security surface is the key presses it
-sends (Accessibility and Automation permissions) and the local event log.
+sends (Accessibility and Automation permissions), the local event log, and
+`config.json`: a `run` shortcut executes its shell command as you, and an `open`
+shortcut launches an app, so treat `config.json` like a script you run.
 
 ## Supported versions
 

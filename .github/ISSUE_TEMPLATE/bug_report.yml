@@ -17,7 +17,7 @@ body:
       placeholder: |
         1. Say "juno"
         2. Dictate a message
-        3. Say "câmbio" — nothing is sent
+        3. Say "over" (or "câmbio" in Portuguese) — nothing is sent
     validations:
       required: true
   - type: input

@@ -132,9 +132,9 @@ class MigrateConfigTest(unittest.TestCase):
                                                "next agent": {"openbot": "next"}})
 
     def test_legacy_tsv_merged_config_wins(self):
-        config, _ = juno.migrate_config({"agents": {"vendas": "Novo"}}, {"vendas": "Velho", "pauta": "YT-Pauta"})
+        config, _ = juno.migrate_config({"agents": {"vendas": "Novo"}}, {"vendas": "Velho", "notas": "Notas"})
         self.assertEqual(config["shortcuts"]["agente vendas"], {"openbot": "Novo"})
-        self.assertEqual(config["shortcuts"]["agente pauta"], {"openbot": "YT-Pauta"})
+        self.assertEqual(config["shortcuts"]["agente notas"], {"openbot": "Notas"})
 
     def test_new_format_untouched(self):
         new = {"language": "pt", "shortcuts": {"salvar": {"keys": "command+s"}}}
