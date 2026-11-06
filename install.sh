@@ -153,13 +153,13 @@ PY
   app_built=true
 }
 
-# O LaunchAgent: Juno.app <esta pasta>, no login (RunAtLoad) e de novo 10 s depois de parar
+# O LaunchAgent: Juno.app <pasta do Juno>, no login (RunAtLoad) e de novo 10 s depois de parar
 # (KeepAlive). Leva o PATH e o LANG deste terminal: os atalhos "run" acham os mesmos
 # comandos, e o pbcopy cola acentos e "·" certo (sem LANG UTF-8 ele os estraga).
 write_plist() {
   local lang_env="${LANG:-}"
   [[ "$lang_env" == *UTF-8* ]] || lang_env=en_US.UTF-8
-  "$PYTHON" - "$PLIST" "$LABEL" "$APP/Contents/MacOS/Juno" "$(pwd)" "$LOGS/juno.log" "$PATH" "$lang_env" <<'PY'
+  "$PYTHON" - "$PLIST" "$LABEL" "$APP/Contents/MacOS/Juno" "$JUNO_DIR" "$LOGS/juno.log" "$PATH" "$lang_env" <<'PY'
 import plistlib, sys
 plist, label, exe, here, logfile, path, lang = sys.argv[1:]
 plistlib.dump({
@@ -197,6 +197,29 @@ elif interactive; then
   [[ "$answer" =~ ^[sSyY] ]] && want_login=true
 fi
 
+# De que pasta o Juno do login roda. Rodar o install.sh noutro clone ou worktree não o leva
+# para lá sem perguntar: sem terminal, ou sem um "sim", fica na pasta de antes.
+JUNO_DIR="$(pwd)"
+saved_dir=""
+if $was_on; then
+  saved_dir="$("$PYTHON" -c 'import plistlib, sys
+args = plistlib.load(open(sys.argv[1], "rb")).get("ProgramArguments", [])
+print(args[1] if len(args) > 1 else "")' "$PLIST" 2>/dev/null || true)"
+elif $old_login && [ -f "$SUPPORT/juno.command" ]; then
+  saved_dir="$(sed -n 's/^cd "\(.*\)" || exit 1$/\1/p' "$SUPPORT/juno.command" | head -n 1)"
+fi
+if $want_login && [ -n "$saved_dir" ] && [ "$saved_dir" != "$JUNO_DIR" ] && [ -f "$saved_dir/juno.py" ]; then
+  answer=n
+  if interactive; then
+    read -r -p "$(t "O Juno do login roda de $saved_dir. Passar para esta pasta ($JUNO_DIR)? [s/N]: " \
+                    "Juno at login runs from $saved_dir. Switch it to this folder ($JUNO_DIR)? [y/N]: ")" answer
+  fi
+  if [[ ! "$answer" =~ ^[sSyY] ]]; then
+    JUNO_DIR="$saved_dir"
+    echo "$(t "O Juno do login continua rodando de $saved_dir." "Juno at login keeps running from $saved_dir.")"
+  fi
+fi
+
 if $want_login && ! command -v swiftc >/dev/null; then
   echo "$(t "Aviso: sem swiftc (xcode-select --install), não dá para abrir o Juno em segundo plano no login." \
             "Warning: no swiftc (xcode-select --install), so Juno can't start in the background at login.")" >&2
@@ -223,16 +246,16 @@ elif $want_login; then
     echo "$(t "Não consegui ligar o Juno agora. Veja se ele está permitido em Ajustes do Sistema › Geral › Itens de Início e Extensões; ele abre no próximo login." \
               "Couldn't start Juno now. Check that it's allowed in System Settings › General › Login Items & Extensions; it starts at your next login.")" >&2
   elif $was_on; then
-    echo "$(t "O Juno reiniciou em segundo plano, com o código desta pasta." \
-              "Juno restarted in the background, with the code in this folder.")"
+    echo "$(t "O Juno reiniciou em segundo plano, com o código de $JUNO_DIR." \
+              "Juno restarted in the background, with the code in $JUNO_DIR.")"
   else
     echo "$(t "Pronto: o Juno está rodando em segundo plano e volta a cada login (e sozinho, se parar)." \
               "Done: Juno is running in the background and starts at every login (and again by itself if it stops).")"
   fi
   # Um Juno.app novo é outro app para o macOS: as permissões são pedidas de novo.
   if $app_built; then
-    echo "$(t "O macOS vai pedir, para \"Juno\": permita o Microfone, ligue o Juno em Acessibilidade e permita controlar o System Events." \
-              "macOS will ask, for \"Juno\": allow the Microphone, turn Juno on in Accessibility, and allow it to control System Events.")"
+    echo "$(t "O macOS vai pedir, para \"Juno\": permita o Microfone, ligue o Juno em Acessibilidade e permita controlar o System Events. Se o Juno já estava na lista de Acessibilidade, tire-o (−) e ligue de novo." \
+              "macOS will ask, for \"Juno\": allow the Microphone, turn Juno on in Accessibility, and allow it to control System Events. If Juno was already in the Accessibility list, remove it (−) and turn it on again.")"
   fi
   echo "  $(t "Log:" "Log:")             tail -f \"$LOGS/juno.log\""
   echo "  $(t "Parar agora:" "Stop for now:")    launchctl bootout $DOMAIN/$LABEL   $(t "(volta no próximo login)" "(comes back at next login)")"

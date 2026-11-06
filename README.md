@@ -183,6 +183,10 @@ JUNO_LANGUAGE=en ./install.sh
 .venv/bin/python juno.py                    # the real thing
 ```
 
+If Juno already runs in the background ([Start at login](#start-at-login)), stop it
+first (`launchctl bootout gui/$(id -u)/com.aryrabelo.juno`), or every key gets
+pressed twice.
+
 > [!TIP]
 > Grant permissions to the app that runs Juno: your terminal app when you run it
 > by hand, or **Juno** with the login option. **Microphone** is asked on start,
@@ -216,6 +220,9 @@ launchctl bootout gui/$(id -u)/com.aryrabelo.juno                      # stop un
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.aryrabelo.juno.plist   # start again
 ```
 
+A mistake in `config.json` makes Juno stop and restart every 10 s; the reason is in
+`juno.log`.
+
 To turn it off for good, stop it and delete the plist:
 
 ```sh
@@ -224,8 +231,10 @@ rm ~/Library/LaunchAgents/com.aryrabelo.juno.plist
 ```
 
 Running `./install.sh` again with the login option on rebuilds Juno.app only when
-its code changed (a rebuilt app is a new app to macOS, which asks for the
-permissions again) and restarts Juno. Older installs, which opened Juno in a
+its code changed and restarts Juno. A rebuilt app is a new app to macOS: if keys
+stop working after one, remove Juno from the Accessibility list (−) and turn it on
+again. A rerun from another clone or worktree asks before moving the login Juno
+there; without an answer it keeps the folder it had. Older installs, which opened Juno in a
 Terminal window at login, are switched to the background one, and the old
 Terminal Juno is stopped.
 
