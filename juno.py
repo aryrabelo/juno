@@ -532,6 +532,13 @@ def load_shortcuts():
     return shortcuts
 
 
+def launcher_gone(environ=os.environ, ppid=None):
+    """Aberto pelo Juno.app (que põe JUNO_LAUNCHER_PID) e ele morreu sem avisar (kill -9): o
+    launchd já abre outro Juno, e com dois as teclas saem duas vezes. Rodando à mão, nunca."""
+    launcher = environ.get("JUNO_LAUNCHER_PID")
+    return bool(launcher) and (os.getppid() if ppid is None else ppid) != int(launcher)
+
+
 def open_mic(callback):
     """Abre o microfone padrão de agora. O PortAudio guarda a lista de aparelhos de quando
     começou; reiniciá-lo antes faz um microfone novo (ou o padrão trocado) aparecer."""
@@ -603,6 +610,10 @@ def main():
     event("start", test=test_only, shortcuts=len(shortcuts), min_conf=MIN_CONF, wake_min_conf=WAKE_MIN_CONF,
           dictation_recent_s=DICTATION_RECENT_S, send_silence_s=SEND_SILENCE_S, mic=mic)
     while True:
+        if launcher_gone():
+            log("o Juno.app parou; saio também (o launchd abre outro)")
+            event("stop", reason="Juno.app parou")
+            return
         try:
             data = audio.get(timeout=MIC_STALL_S)
         except queue.Empty:

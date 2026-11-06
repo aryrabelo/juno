@@ -39,6 +39,10 @@ let juno = Process()
 juno.executableURL = dir.appendingPathComponent(".venv/bin/python")
 juno.arguments = ["-W", "ignore", dir.appendingPathComponent("juno.py").path] + args.dropFirst(2)
 juno.currentDirectoryURL = dir
+// Se este app morrer sem repassar nada (kill -9), o juno.py vê que o pai mudou e sai sozinho.
+var env = ProcessInfo.processInfo.environment
+env["JUNO_LAUNCHER_PID"] = String(getpid())
+juno.environment = env
 juno.terminationHandler = { p in
     exit(p.terminationReason == .uncaughtSignal ? 128 + p.terminationStatus : p.terminationStatus)
 }

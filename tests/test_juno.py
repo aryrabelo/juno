@@ -194,5 +194,16 @@ class RmsTest(unittest.TestCase):
         self.assertEqual(juno.rms((16).to_bytes(2, "little", signed=True) * 100), 16)
 
 
+class LauncherGoneTest(unittest.TestCase):
+    def test_by_hand(self):
+        self.assertFalse(juno.launcher_gone({}, ppid=1))
+
+    def test_launcher_alive(self):
+        self.assertFalse(juno.launcher_gone({"JUNO_LAUNCHER_PID": "4321"}, ppid=4321))
+
+    def test_launcher_killed(self):  # órfão: o pai vira o launchd (pid 1)
+        self.assertTrue(juno.launcher_gone({"JUNO_LAUNCHER_PID": "4321"}, ppid=1))
+
+
 if __name__ == "__main__":
     unittest.main()
