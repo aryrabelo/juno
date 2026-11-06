@@ -31,6 +31,7 @@ Every change must pass:
 .venv/bin/python -m py_compile juno.py
 bash -n install.sh
 swiftc -O -o /tmp/next-agent next-agent.swift   # if you changed the helper
+swiftc -O -o /tmp/juno-app juno-app.swift       # if you changed the launcher
 ```
 
 ## Project layout
@@ -38,6 +39,7 @@ swiftc -O -o /tmp/next-agent next-agent.swift   # if you changed the helper
 ```
 juno.py            the listener (one file, on purpose)
 next-agent.swift   OpenBot module helper ({"openbot": "next"})
+juno-app.swift     Juno.app, the background launcher for start at login
 install.sh         setup and configuration
 tests/             unit tests for the pure parts
 ```
