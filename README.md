@@ -64,7 +64,8 @@ as unknown.
   [Extra shortcuts](#-extra-shortcuts).
 - **Your words** — the bot name, the send word, the dictation shortcut, and your
   extra shortcuts all live in one `config.json`.
-- **Start at login** — the installer can open Juno in a Terminal window on login.
+- **Start at login, in the background** — the installer can run Juno at login with
+  no window, and restart it by itself if it stops.
 
 > [!NOTE]
 > Juno understands **Brazilian Portuguese** and **English**, one per install (the
@@ -164,9 +165,10 @@ cd juno
 The installer asks for the language first — **Português** or **English**, defaulting
 to your Mac's language — and talks to you in it from then on. Then it creates a
 Python environment, downloads that language's voice model, asks for the bot name,
-the send word and the FluidVoice shortcut, and offers to start Juno at login.
-Running it again is safe: it updates without touching your `config.json`, and keeps
-the language you chose.
+the send word and the FluidVoice shortcut, and offers to start Juno at login, in
+the background (see [Start at login](#start-at-login)).
+Running it again is safe: it updates without touching your `config.json`, keeps
+the language you chose, and restarts the background Juno with the new code.
 
 To pick the language without the question (e.g. in a script):
 
@@ -182,10 +184,50 @@ JUNO_LANGUAGE=en ./install.sh
 ```
 
 > [!TIP]
-> Grant permissions to the app that runs Juno (Terminal, if you use the login
-> option): **Microphone** is asked on start, **Accessibility** is under System
-> Settings › Privacy & Security, and **Automation › System Events** is asked on
-> the first key press.
+> Grant permissions to the app that runs Juno: your terminal app when you run it
+> by hand, or **Juno** with the login option. **Microphone** is asked on start,
+> **Accessibility** is under System Settings › Privacy & Security (Ajustes do
+> Sistema › Privacidade e Segurança), and **Automation › System Events** is asked
+> on the first key press.
+
+### Start at login
+
+Answer yes to *Start Juno at login, in the background?* (Portuguese: *Abrir o
+Juno sozinho no login, em segundo plano?*) and the installer:
+
+- builds a tiny **Juno.app** in `~/Library/Application Support/Juno/`, with no
+  window and no Dock icon, that runs `juno.py` from your clone;
+- adds a LaunchAgent, `~/Library/LaunchAgents/com.aryrabelo.juno.plist`, that
+  opens it at every login and again 10 s after it stops;
+- starts it right away. What Juno prints goes to `~/Library/Logs/Juno/juno.log`.
+
+The first time, macOS asks on behalf of **Juno**: allow the **Microphone**, turn
+**Juno** on in **Accessibility**, and allow it to control **System Events**.
+Juno.app exists for this: it's what macOS asks about and lists in System
+Settings, and `juno.py` inherits its permissions, the way it inherits Terminal's
+when you run it by hand. Python on its own has no microphone prompt, so macOS
+would deny it without asking. If your clone lives in Documents, Desktop or
+Downloads, macOS also asks to let Juno open that folder.
+
+```sh
+tail -f ~/Library/Logs/Juno/juno.log                                   # what it hears
+launchctl kickstart -k gui/$(id -u)/com.aryrabelo.juno                 # restart (e.g. after editing config.json)
+launchctl bootout gui/$(id -u)/com.aryrabelo.juno                      # stop until the next login
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.aryrabelo.juno.plist   # start again
+```
+
+To turn it off for good, stop it and delete the plist:
+
+```sh
+launchctl bootout gui/$(id -u)/com.aryrabelo.juno
+rm ~/Library/LaunchAgents/com.aryrabelo.juno.plist
+```
+
+Running `./install.sh` again with the login option on rebuilds Juno.app only when
+its code changed (a rebuilt app is a new app to macOS, which asks for the
+permissions again) and restarts Juno. Older installs, which opened Juno in a
+Terminal window at login, are switched to the background one, and the old
+Terminal Juno is stopped.
 
 ## ⚙️ Configuration
 
@@ -271,6 +313,7 @@ Check a word before using it:
 ```
 juno.py                  the listener
 next-agent.swift         OpenBot module helper (compiled to bin/)
+juno-app.swift           Juno.app, the background launcher for start at login
 install.sh               setup in Portuguese or English, configuration, start at login
 config.example.pt.json   default configuration in Portuguese
 config.example.en.json   default configuration in English

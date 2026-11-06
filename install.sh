@@ -115,39 +115,139 @@ else
             "Warning: no swiftc (xcode-select --install); \"next agent\" stays off.")" >&2
 fi
 
-# Início no login: um LaunchAgent abre o Juno numa janela do Terminal. Assim as permissões
-# de Microfone e Acessibilidade ficam com o Terminal, as mesmas que você deu ao testar.
-if interactive && [ ! -f "$PLIST" ]; then
-  read -r -p "$(t "Abrir o Juno sozinho no login? [s/N]: " "Start Juno at login? [y/N]: ")" answer
-  if [[ "$answer" =~ ^[sSyY] ]]; then
-    mkdir -p "$SUPPORT" "$(dirname "$PLIST")"
-    cat > "$SUPPORT/juno.command" <<EOF
-#!/bin/zsh
-# Aberto no login pelo LaunchAgent $LABEL. Feche a janela para parar o Juno.
-cd "$(pwd)" || exit 1
-while true; do
-  .venv/bin/python -W ignore juno.py
-  echo "$(t "O Juno parou (código \$?). Volta em 10 s." "Juno stopped (exit code \$?). Restarting in 10 s.")"
-  sleep 10
-done
-EOF
-    chmod +x "$SUPPORT/juno.command"
-    cat > "$PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>$LABEL</string>
-  <key>ProgramArguments</key>
-  <array><string>/usr/bin/open</string><string>-a</string><string>Terminal</string><string>$SUPPORT/juno.command</string></array>
-  <key>RunAtLoad</key><true/>
-</dict>
-</plist>
-EOF
-    echo "$(t "Pronto: o Juno abre no próximo login. Para desligar: rm \"$PLIST\"" \
-              "Done: Juno opens at your next login. To turn it off: rm \"$PLIST\"")"
+# Início no login, em segundo plano e sem janela: o LaunchAgent abre o Juno.app no login e de
+# novo se ele parar. O Juno.app (juno-app.swift) é um app de verdade, então o macOS pede
+# Microfone, Acessibilidade e Automação em nome de "Juno" e o juno.py, filho dele, herda.
+# Instalação antiga (o LaunchAgent abria juno.command numa janela do Terminal): vira esta.
+APP="$SUPPORT/Juno.app"
+LOGS="$HOME/Library/Logs/Juno"
+DOMAIN="gui/$(id -u)"
+
+# Monta o Juno.app. Só recompila quando o código ou o Info.plist mudam: o swiftc não gera
+# sempre o mesmo binário, e um binário novo faz o macOS pedir as permissões de novo.
+build_app() {
+  local tmp; tmp="$(mktemp -d)"
+  "$PYTHON" - "$tmp/Info.plist" \
+    "$(t "O Juno ouve só as suas palavras de comando, sem nada sair do Mac." \
+         "Juno listens only for your command words; nothing leaves the Mac.")" \
+    "$(t "O Juno aperta as teclas dos seus comandos de voz pelo System Events." \
+         "Juno presses the keys for your voice commands through System Events.")" <<'PY'
+import plistlib, sys
+plistlib.dump({
+    "CFBundleIdentifier": "com.aryrabelo.juno", "CFBundleName": "Juno", "CFBundleExecutable": "Juno",
+    "CFBundlePackageType": "APPL", "CFBundleVersion": "1", "CFBundleShortVersionString": "1",
+    "LSUIElement": True, "NSMicrophoneUsageDescription": sys.argv[2], "NSAppleEventsUsageDescription": sys.argv[3],
+}, open(sys.argv[1], "wb"))
+PY
+  if [ -x "$APP/Contents/MacOS/Juno" ] && cat juno-app.swift "$tmp/Info.plist" | cmp -s - "$SUPPORT/Juno.app.src"; then
+    rm -rf "$tmp"; return 0
   fi
+  mkdir -p "$tmp/Juno.app/Contents/MacOS"
+  cp "$tmp/Info.plist" "$tmp/Juno.app/Contents/Info.plist"
+  swiftc -O -o "$tmp/Juno.app/Contents/MacOS/Juno" juno-app.swift
+  codesign --force --sign - "$tmp/Juno.app" 2>/dev/null   # "replacing existing signature": o ld já assina
+  rm -rf "$APP"
+  mv "$tmp/Juno.app" "$APP"
+  cat juno-app.swift "$tmp/Info.plist" > "$SUPPORT/Juno.app.src"
+  rm -rf "$tmp"
+  app_built=true
+}
+
+# O LaunchAgent: Juno.app <esta pasta>, no login (RunAtLoad) e de novo 10 s depois de parar
+# (KeepAlive). Leva o PATH e o LANG deste terminal: os atalhos "run" acham os mesmos
+# comandos, e o pbcopy cola acentos e "·" certo (sem LANG UTF-8 ele os estraga).
+write_plist() {
+  local lang_env="${LANG:-}"
+  [[ "$lang_env" == *UTF-8* ]] || lang_env=en_US.UTF-8
+  "$PYTHON" - "$PLIST" "$LABEL" "$APP/Contents/MacOS/Juno" "$(pwd)" "$LOGS/juno.log" "$PATH" "$lang_env" <<'PY'
+import plistlib, sys
+plist, label, exe, here, logfile, path, lang = sys.argv[1:]
+plistlib.dump({
+    "Label": label, "ProgramArguments": [exe, here],
+    "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 10, "ProcessType": "Interactive",
+    "StandardOutPath": logfile, "StandardErrorPath": logfile,
+    "EnvironmentVariables": {"PATH": path, "LANG": lang},
+    "AssociatedBundleIdentifiers": ["com.aryrabelo.juno"],
+}, open(plist, "wb"))
+PY
+}
+
+# (Re)carrega o LaunchAgent agora, sem esperar o próximo login.
+start_agent() {
+  launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+  local _
+  for _ in 1 2 3 4 5 6 7 8 9 10; do   # o bootout termina o Juno antigo; espera ele sair
+    launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+  launchctl bootstrap "$DOMAIN" "$PLIST"
+}
+
+app_built=false
+was_on=false      # já rodava em segundo plano: rodar o install.sh de novo só atualiza e reinicia
+[ -f "$PLIST" ] && ! grep -q 'juno\.command' "$PLIST" && was_on=true
+old_login=false   # o jeito antigo: LaunchAgent abrindo juno.command no Terminal
+[ -f "$PLIST" ] && grep -q 'juno\.command' "$PLIST" && old_login=true
+want_login=false
+if [ -f "$PLIST" ]; then
+  want_login=true   # já estava ligado: atualiza (e reinicia com o código novo)
+elif interactive; then
+  read -r -p "$(t "Abrir o Juno sozinho no login, em segundo plano (sem janela)? [s/N]: " \
+                  "Start Juno at login, in the background (no window)? [y/N]: ")" answer
+  [[ "$answer" =~ ^[sSyY] ]] && want_login=true
 fi
 
-echo "$(t "Pronto. Teste com: .venv/bin/python juno.py --test --verbose" \
-          "Done. Try it: .venv/bin/python juno.py --test --verbose")"
+if $want_login && ! command -v swiftc >/dev/null; then
+  echo "$(t "Aviso: sem swiftc (xcode-select --install), não dá para abrir o Juno em segundo plano no login." \
+            "Warning: no swiftc (xcode-select --install), so Juno can't start in the background at login.")" >&2
+  $old_login && echo "$(t "O início antigo, na janela do Terminal, continua como estava." \
+                          "The old start, in a Terminal window, stays as it was.")" >&2
+elif $want_login; then
+  mkdir -p "$SUPPORT" "$LOGS" "$(dirname "$PLIST")"
+  build_app
+  write_plist
+  if $old_login; then
+    rm -f "$SUPPORT/juno.command"
+    echo "$(t "O Juno não abre mais numa janela do Terminal no login: agora roda em segundo plano." \
+              "Juno no longer opens in a Terminal window at login: it now runs in the background.")"
+    # O Juno antigo ainda aberto no Terminal apertaria as teclas junto com o novo: para os dois
+    # (o laço do juno.command primeiro, senão ele abre o python de novo).
+    for pid in $(pgrep -f -- "$SUPPORT/juno.command" || true); do
+      kids="$(pgrep -P "$pid" || true)"
+      kill "$pid" $kids 2>/dev/null || true
+      echo "$(t "Parei o Juno antigo que rodava numa janela do Terminal; pode fechar a janela." \
+                "Stopped the old Juno running in a Terminal window; you can close that window.")"
+    done
+  fi
+  if ! start_agent; then
+    echo "$(t "Não consegui ligar o Juno agora. Veja se ele está permitido em Ajustes do Sistema › Geral › Itens de Início e Extensões; ele abre no próximo login." \
+              "Couldn't start Juno now. Check that it's allowed in System Settings › General › Login Items & Extensions; it starts at your next login.")" >&2
+  elif $was_on; then
+    echo "$(t "O Juno reiniciou em segundo plano, com o código desta pasta." \
+              "Juno restarted in the background, with the code in this folder.")"
+  else
+    echo "$(t "Pronto: o Juno está rodando em segundo plano e volta a cada login (e sozinho, se parar)." \
+              "Done: Juno is running in the background and starts at every login (and again by itself if it stops).")"
+  fi
+  # Um Juno.app novo é outro app para o macOS: as permissões são pedidas de novo.
+  if $app_built; then
+    echo "$(t "O macOS vai pedir, para \"Juno\": permita o Microfone, ligue o Juno em Acessibilidade e permita controlar o System Events." \
+              "macOS will ask, for \"Juno\": allow the Microphone, turn Juno on in Accessibility, and allow it to control System Events.")"
+  fi
+  echo "  $(t "Log:" "Log:")             tail -f \"$LOGS/juno.log\""
+  echo "  $(t "Parar agora:" "Stop for now:")    launchctl bootout $DOMAIN/$LABEL   $(t "(volta no próximo login)" "(comes back at next login)")"
+  echo "  $(t "Ligar de novo:" "Start again:")   launchctl bootstrap $DOMAIN \"$PLIST\""
+  echo "  $(t "Desligar de vez:" "Turn it off:")  launchctl bootout $DOMAIN/$LABEL; rm \"$PLIST\""
+fi
+# Sobra de uma instalação antiga desligada (rm do plist): o juno.command não serve mais.
+if [ -f "$SUPPORT/juno.command" ] && ! grep -qs 'juno\.command' "$PLIST"; then
+  rm -f "$SUPPORT/juno.command"
+fi
+
+if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+  echo "$(t "Para testar à mão, pare o de segundo plano antes (launchctl bootout $DOMAIN/$LABEL) e rode: .venv/bin/python juno.py --test --verbose" \
+            "To try it by hand, stop the background one first (launchctl bootout $DOMAIN/$LABEL), then run: .venv/bin/python juno.py --test --verbose")"
+else
+  echo "$(t "Pronto. Teste com: .venv/bin/python juno.py --test --verbose" \
+            "Done. Try it: .venv/bin/python juno.py --test --verbose")"
+fi
